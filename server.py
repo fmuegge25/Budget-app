@@ -1,7 +1,8 @@
 """
-Local Plaid bridge server for Simple Budget bank sync.
+Simple Budget server: serves the app itself, holds the shared budget data
+(so phone + laptop see the same thing), and bridges Plaid bank sync.
 Run with: python server.py
-Listens on http://localhost:5112
+Listens on http://localhost:5112 (also reachable via Tailscale from other devices)
 """
 
 import json
@@ -9,14 +10,16 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import requests as http
 
-app = Flask(__name__)
-CORS(app)  # allow the HTML file (file://) to call this server
+ROOT = Path(__file__).parent
+app = Flask(__name__, static_folder=None)
+CORS(app)  # allow requests from other devices on the tailnet
 
-CONFIG_FILE = Path(__file__).parent / "plaid_config.json"
+CONFIG_FILE = ROOT / "plaid_config.json"
+STATE_FILE = ROOT / "budget_data.json"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +49,37 @@ def plaid_headers():
 def plaid_post(endpoint, body):
     r = http.post(f"{plaid_base()}{endpoint}", json=body, headers=plaid_headers())
     return r.json(), r.status_code
+
+# ── Static app serving ───────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return send_from_directory(ROOT, "index.html")
+
+@app.route("/manifest.json")
+def manifest():
+    return send_from_directory(ROOT, "manifest.json")
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory(ROOT, "sw.js")
+
+@app.route("/icons/<path:filename>")
+def icons(filename):
+    return send_from_directory(ROOT / "icons", filename)
+
+# ── Shared budget state ──────────────────────────────────────────────────────
+
+@app.route("/api/state", methods=["GET"])
+def get_state():
+    if STATE_FILE.exists():
+        return jsonify(json.loads(STATE_FILE.read_text()))
+    return jsonify(None)
+
+@app.route("/api/state", methods=["POST"])
+def save_state():
+    STATE_FILE.write_text(json.dumps(request.json))
+    return jsonify({"ok": True})
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 

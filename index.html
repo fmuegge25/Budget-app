@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Simple Budget</title>
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Budget" />
+<meta name="theme-color" content="#2563eb" />
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
@@ -15,6 +22,11 @@
 </head>
 <body class="bg-gray-100">
 <div id="root"></div>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+  }
+</script>
 <script type="text/babel" data-presets="react">
 
 const { useReducer, useState, useEffect, useMemo, createContext, useContext } = React;
@@ -505,7 +517,7 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
   );
 }
 
-const BANK_SERVER = 'http://localhost:5112';
+const BANK_SERVER = ''; // relative — same origin the app was loaded from (works over Tailscale too)
 
 function PlaidSetupModal({ onClose }) {
   const [clientId, setClientId] = useState('');
@@ -873,10 +885,28 @@ function App() {
   const [state, dispatch] = useReducer(reducer, null, loadInitial);
   const [view, setView] = useState({ type: 'budget' });
   const [monthKey, setMonthKey] = useState(todayMonthKey());
+  const [serverReady, setServerReady] = useState(false);
 
+  // On mount, pull the shared server copy (source of truth across devices).
+  useEffect(() => {
+    fetch('/api/state')
+      .then(r => r.json())
+      .then(serverState => { if (serverState) dispatch({ type: 'LOAD', state: serverState }); })
+      .catch(() => {})
+      .finally(() => setServerReady(true));
+  }, []);
+
+  // Cache locally always; push to the shared server once we know we're not
+  // about to clobber it with stale pre-load data.
   useEffect(() => {
     localStorage.setItem('simplebudget1', JSON.stringify(state));
-  }, [state]);
+    if (!serverReady) return;
+    fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state),
+    }).catch(() => {});
+  }, [state, serverReady]);
 
   return (
     <BudgetContext.Provider value={{ state, dispatch }}>
