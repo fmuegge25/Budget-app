@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Simple Budget</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+</style>
+</head>
+<body class="bg-gray-100">
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+const { useReducer, useState, useEffect, useMemo, createContext, useContext } = React;
+
+// ---------- Utilities ----------
+const uid = () => Math.random().toString(36).slice(2, 10);
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const monthKeyOf = (dateStr) => dateStr.slice(0, 7);
+const todayMonthKey = () => todayStr().slice(0, 7);
+
+function fmt(n) {
+  const v = Math.abs(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n < 0 ? `($${v})` : `$${v}`;
+}
+
+function moneyClass(n) {
+  if (n < -0.004) return 'text-red-600';
+  if (n > 0.004) return 'text-emerald-700';
+  return 'text-gray-500';
+}
+
+function shiftMonth(monthKey, delta) {
+  let [y, m] = monthKey.split('-').map(Number);
+  m += delta;
+  while (m > 12) { m -= 12; y += 1; }
+  while (m < 1) { m += 12; y -= 1; }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+function monthLabel(monthKey) {
+  const [y, m] = monthKey.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function monthRange(minKey, maxKey) {
+  const out = [];
+  let cur = minKey;
+  let guard = 0;
+  while (cur <= maxKey && guard < 600) {
+    out.push(cur);
+    if (cur === maxKey) break;
+    cur = shiftMonth(cur, 1);
+    guard++;
+  }
+  return out;
+}
+
+const GROUPS = ['Wants', 'Needs', 'Bills', 'Debts'];
+const ALL_GROUPS = [...GROUPS, 'Deposits', 'Transfer'];
+
+// ---------- Sample Data ----------
+function sampleData() {
+  const cat = (group, name) => ({ id: uid(), group, name });
+  const categories = [
+    cat('Wants', 'Dining Out'), cat('Wants', 'My spending money'), cat('Wants', 'Their spending money'),
+    cat('Wants', 'Gifts'), cat('Wants', 'Treat your spouse'), cat('Wants', 'Experiences'), cat('Wants', 'Gas Station Food'),
+    cat('Needs', 'Dr. Visits'), cat('Needs', 'MISC'), cat('Needs', 'Dog Stuff'), cat('Needs', 'Groceries'),
+    cat('Needs', 'Gas'), cat('Needs', 'Auto Maintenance'), cat('Needs', 'Emergency Fund'), cat('Needs', 'Reimbursement'), cat('Needs', 'Split'),
+    cat('Bills', 'Tithing'), cat('Bills', 'Rent'), cat('Bills', 'Utilities'), cat('Bills', 'Internet'),
+    cat('Bills', 'Auto Insurance'), cat('Bills', 'Subscriptions'), cat('Bills', 'YouTube TV'),
+    cat('Bills', 'Supporting Jacob'), cat('Bills', 'Business Expense'),
+    cat('Debts', 'Jaime Oakes'), cat('Debts', 'Auto Loans'),
+  ];
+  const accounts = [
+    { id: uid(), name: 'CFCU Checking', startingBalance: 10193.42 },
+    { id: uid(), name: 'CFCU Savings', startingBalance: 186.84 },
+    { id: uid(), name: 'SEB Checking', startingBalance: 1860.31 },
+    { id: uid(), name: 'SEB Savings', startingBalance: 121.39 },
+    { id: uid(), name: 'FM Feeders', startingBalance: 442.36 },
+    { id: uid(), name: 'Credit Card', startingBalance: 0 },
+  ];
+  return { accounts, categories, transactions: [], budgetMonths: {} };
+}
+
+// ---------- Reducer ----------
+function reducer(state, action) {
+  switch (action.type) {
+    case 'ADD_TRANSACTION':
+      return { ...state, transactions: [...state.transactions, { id: uid(), ...action.tx }] };
+    case 'UPDATE_TRANSACTION':
+      return { ...state, transactions: state.transactions.map(t => t.id === action.id ? { ...t, ...action.patch } : t) };
+    case 'DELETE_TRANSACTION': {
+      const target = state.transactions.find(t => t.id === action.id);
+      const linkId = target && target.linkId;
+      return {
+        ...state,
+        transactions: state.transactions.filter(t => t.id !== action.id && !(linkId && t.linkId === linkId)),
+      };
+    }
+    case 'ADD_TRANSFER': {
+      const linkId = uid();
+      const out = { id: uid(), date: action.date, accountId: action.fromAccountId, description: `Transfer to ${action.toName}`, amount: -Math.abs(action.amount), group: 'Transfer', categoryId: null, memo: action.memo || '', linkId };
+      const inn = { id: uid(), date: action.date, accountId: action.toAccountId, description: `Transfer from ${action.fromName}`, amount: Math.abs(action.amount), group: 'Transfer', categoryId: null, memo: action.memo || '', linkId };
+      return { ...state, transactions: [...state.transactions, out, inn] };
+    }
+    case 'SET_ASSIGNED': {
+      const monthData = { ...(state.budgetMonths[action.monthKey] || {}) };
+      monthData[action.categoryId] = action.amount;
+      return { ...state, budgetMonths: { ...state.budgetMonths, [action.monthKey]: monthData } };
+    }
+    case 'ADD_CATEGORY':
+      return { ...state, categories: [...state.categories, { id: uid(), group: action.group, name: action.name }] };
+    case 'RENAME_CATEGORY':
+      return { ...state, categories: state.categories.map(c => c.id === action.id ? { ...c, name: action.name } : c) };
+    case 'DELETE_CATEGORY':
+      return { ...state, categories: state.categories.filter(c => c.id !== action.id) };
+    case 'MOVE_CATEGORY': {
+      const cats = [...state.categories];
+      const idx = cats.findIndex(c => c.id === action.id);
+      if (idx === -1) return state;
+      const group = cats[idx].group;
+      const step = action.direction === 'up' ? -1 : 1;
+      for (let i = idx + step; i >= 0 && i < cats.length; i += step) {
+        if (cats[i].group === group) {
+          [cats[i], cats[idx]] = [cats[idx], cats[i]];
+          break;
+        }
+      }
+      return { ...state, categories: cats };
+    }
+    case 'ADD_ACCOUNT':
+      return { ...state, accounts: [...state.accounts, { id: uid(), name: action.name, startingBalance: action.startingBalance || 0 }] };
+    case 'RENAME_ACCOUNT':
+      return { ...state, accounts: state.accounts.map(a => a.id === action.id ? { ...a, name: action.name } : a) };
+    case 'DELETE_ACCOUNT':
+      return { ...state, accounts: state.accounts.filter(a => a.id !== action.id), transactions: state.transactions.filter(t => t.accountId !== action.id) };
+    case 'BANK_SYNC': {
+      const removed = new Set(action.removed || []);
+      const existingPlaidIds = new Set(state.transactions.filter(t => t.plaidId).map(t => t.plaidId));
+      const newTxns = (action.added || [])
+        .filter(t => !existingPlaidIds.has(t.id))
+        .map(t => ({
+          id: uid(),
+          plaidId: t.id,
+          date: t.date,
+          accountId: action.accountId,
+          description: t.payee || t.memo || 'Bank transaction',
+          amount: t.amount,
+          group: t.amount > 0 ? 'Deposits' : null,
+          categoryId: null,
+          memo: t.memo || '',
+        }));
+      return {
+        ...state,
+        transactions: [...state.transactions.filter(t => !(t.plaidId && removed.has(t.plaidId))), ...newTxns],
+      };
+    }
+    case 'LOAD':
+      return action.state;
+    default:
+      return state;
+  }
+}
+
+function loadInitial() {
+  try {
+    const raw = localStorage.getItem('simplebudget1');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return sampleData();
+}
+
+// ---------- Budget math ----------
+function computeCategoryHistory(state, catId, uptoMonthKey) {
+  const txMonths = state.transactions.filter(t => t.categoryId === catId).map(t => monthKeyOf(t.date));
+  const assignedMonths = Object.keys(state.budgetMonths).filter(m => (state.budgetMonths[m] || {})[catId] !== undefined);
+  const candidates = [...txMonths, ...assignedMonths, uptoMonthKey];
+  const minMonth = candidates.reduce((a, b) => (a < b ? a : b), uptoMonthKey);
+  const range = monthRange(minMonth, uptoMonthKey);
+  let carry = 0, row = { carryIn: 0, assigned: 0, actual: 0, remaining: 0 };
+  for (const m of range) {
+    const assigned = (state.budgetMonths[m] || {})[catId] || 0;
+    const actual = state.transactions
+      .filter(t => t.categoryId === catId && monthKeyOf(t.date) === m)
+      .reduce((s, t) => s + t.amount, 0);
+    const remaining = carry + assigned + actual;
+    row = { carryIn: carry, assigned, actual, remaining };
+    carry = remaining;
+  }
+  return row;
+}
+
+function accountBalance(state, accountId) {
+  const acc = state.accounts.find(a => a.id === accountId);
+  if (!acc) return 0;
+  const sum = state.transactions.filter(t => t.accountId === accountId).reduce((s, t) => s + t.amount, 0);
+  return acc.startingBalance + sum;
+}
+
+function totalAssignedForMonth(state, monthKey) {
+  const monthData = state.budgetMonths[monthKey] || {};
+  return Object.values(monthData).reduce((s, v) => s + (v || 0), 0);
+}
+
+function readyToAssign(state, monthKey) {
+  const totalBalances = state.accounts.reduce((s, a) => s + accountBalance(state, a.id), 0);
+  return totalBalances - totalAssignedForMonth(state, monthKey);
+}
+
+// ---------- Context ----------
+const BudgetContext = createContext(null);
+
+// ---------- Components ----------
+function EditableMoney({ value, onCommit, className }) {
+  const [text, setText] = useState(value === 0 ? '' : String(value));
+  useEffect(() => { setText(value === 0 ? '' : String(value)); }, [value]);
+  return (
+    <input
+      type="text"
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={() => {
+        const n = parseFloat(text.replace(/[^0-9.\-]/g, ''));
+        onCommit(isNaN(n) ? 0 : n);
+      }}
+      className={`w-24 text-right bg-transparent border-b border-transparent focus:border-gray-400 outline-none ${className || ''}`}
+      placeholder="0.00"
+    />
+  );
+}
+
+function Sidebar({ view, setView, monthKey, setMonthKey }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const rta = readyToAssign(state, monthKey);
+  const [newAccName, setNewAccName] = useState('');
+  const [newAccBal, setNewAccBal] = useState('');
+
+  return (
+    <div className="w-64 shrink-0 bg-white border-r h-screen overflow-y-auto flex flex-col">
+      <div className="p-4 border-b">
+        <div className="font-bold text-lg text-gray-800">Simple Budget</div>
+      </div>
+
+      <div className="p-4 border-b flex items-center justify-between">
+        <button className="px-2 py-1 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, -1))}>‹</button>
+        <div className="font-medium text-sm text-gray-700">{monthLabel(monthKey)}</div>
+        <button className="px-2 py-1 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, 1))}>›</button>
+      </div>
+
+      <div className="p-4 border-b">
+        <div className={`rounded-lg p-3 ${rta >= 0 ? 'bg-yellow-200' : 'bg-red-200'}`}>
+          <div className="text-xs text-gray-700">Ready to Assign</div>
+          <div className={`text-xl font-bold ${rta < 0 ? 'text-red-700' : 'text-gray-900'}`}>{fmt(rta)}</div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => setView({ type: 'budget' })}
+        className={`text-left px-4 py-2 font-medium ${view.type === 'budget' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+      >
+        Budget
+      </button>
+      <button
+        onClick={() => setView({ type: 'reports' })}
+        className={`text-left px-4 py-2 font-medium ${view.type === 'reports' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+      >
+        Reports
+      </button>
+
+      <div className="px-4 py-2 text-xs uppercase tracking-wide text-gray-400 mt-2">Accounts</div>
+      <div className="flex-1 overflow-y-auto">
+        <button
+          onClick={() => setView({ type: 'all-accounts' })}
+          className={`w-full text-left px-4 py-2 italic ${view.type === 'all-accounts' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
+        >
+          All Accounts
+        </button>
+        {state.accounts.map(a => (
+          <div
+            key={a.id}
+            onClick={() => setView({ type: 'register', accountId: a.id })}
+            className={`w-full text-left px-4 py-2 flex justify-between items-center cursor-pointer group ${view.type === 'register' && view.accountId === a.id ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+          >
+            <span className="truncate flex-1">{a.name}</span>
+            <span className={`text-sm mr-2 ${moneyClass(accountBalance(state, a.id))}`}>{fmt(accountBalance(state, a.id))}</span>
+            <span className="opacity-0 group-hover:opacity-100 shrink-0 flex gap-1">
+              <button
+                className="text-gray-300 hover:text-blue-500 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const name = window.prompt('Rename account', a.name);
+                  if (name && name.trim()) dispatch({ type: 'RENAME_ACCOUNT', id: a.id, name: name.trim() });
+                }}
+              >rename</button>
+              <button
+                className="text-gray-300 hover:text-red-500 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm(`Delete "${a.name}" and all its transactions? This can't be undone.`)) {
+                    dispatch({ type: 'DELETE_ACCOUNT', id: a.id });
+                    if (view.type === 'register' && view.accountId === a.id) setView({ type: 'budget' });
+                  }
+                }}
+              >✕</button>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="p-3 border-t text-sm">
+        <input className="w-full border rounded px-2 py-1 mb-1" placeholder="New account name"
+          value={newAccName} onChange={e => setNewAccName(e.target.value)} />
+        <div className="flex gap-1">
+          <input className="w-full border rounded px-2 py-1" placeholder="Starting balance"
+            value={newAccBal} onChange={e => setNewAccBal(e.target.value)} />
+          <button
+            className="px-2 py-1 bg-blue-600 text-white rounded whitespace-nowrap"
+            onClick={() => {
+              if (!newAccName.trim()) return;
+              dispatch({ type: 'ADD_ACCOUNT', name: newAccName.trim(), startingBalance: parseFloat(newAccBal) || 0 });
+              setNewAccName(''); setNewAccBal('');
+            }}
+          >Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GroupCard({ group, monthKey }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const [newCat, setNewCat] = useState('');
+  const cats = state.categories.filter(c => c.group === group);
+
+  let totalAssigned = 0, totalRemaining = 0, totalCarry = 0;
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+      <div className="px-4 py-2 bg-gray-800 text-white font-semibold">{group}</div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-gray-500 text-xs border-b">
+            <th className="text-left px-3 py-1 font-normal">Category</th>
+            <th className="text-right px-3 py-1 font-normal">Carryover</th>
+            <th className="text-right px-3 py-1 font-normal">Assigned</th>
+            <th className="text-right px-3 py-1 font-normal">Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cats.map(c => {
+            const row = computeCategoryHistory(state, c.id, monthKey);
+            totalAssigned += row.assigned; totalRemaining += row.remaining; totalCarry += row.carryIn;
+            return (
+              <tr key={c.id} className="border-b last:border-0 hover:bg-gray-50 group">
+                <td className="px-3 py-1.5">
+                  <div className="flex items-center justify-between">
+                    <span>{c.name}</span>
+                    <span className="opacity-0 group-hover:opacity-100 flex items-center gap-1 shrink-0">
+                      <button className="text-gray-300 hover:text-gray-600 text-xs px-0.5" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
+                      <button className="text-gray-300 hover:text-gray-600 text-xs px-0.5" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
+                      <button
+                        className="text-gray-300 hover:text-blue-500 text-xs px-1"
+                        onClick={() => {
+                          const name = window.prompt('Rename category', c.name);
+                          if (name && name.trim()) dispatch({ type: 'RENAME_CATEGORY', id: c.id, name: name.trim() });
+                        }}
+                      >rename</button>
+                      <button
+                        className="text-gray-300 hover:text-red-500 text-xs px-1"
+                        onClick={() => {
+                          if (window.confirm(`Delete category "${c.name}"? Existing transactions keep their tag but it'll disappear from this view.`)) {
+                            dispatch({ type: 'DELETE_CATEGORY', id: c.id });
+                          }
+                        }}
+                      >✕</button>
+                    </span>
+                  </div>
+                </td>
+                <td className={`px-3 py-1.5 text-right ${moneyClass(row.carryIn)}`}>{fmt(row.carryIn)}</td>
+                <td className="px-3 py-1.5 text-right">
+                  <EditableMoney
+                    value={row.assigned}
+                    onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
+                  />
+                </td>
+                <td className={`px-3 py-1.5 text-right font-medium ${moneyClass(row.remaining)}`}>{fmt(row.remaining)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="border-t bg-gray-50 font-semibold">
+            <td className="px-3 py-1.5">Total</td>
+            <td className={`px-3 py-1.5 text-right ${moneyClass(totalCarry)}`}>{fmt(totalCarry)}</td>
+            <td className="px-3 py-1.5 text-right">{fmt(totalAssigned)}</td>
+            <td className={`px-3 py-1.5 text-right ${moneyClass(totalRemaining)}`}>{fmt(totalRemaining)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div className="p-2 border-t flex gap-1">
+        <input
+          className="flex-1 border rounded px-2 py-1 text-sm"
+          placeholder={`Add ${group.toLowerCase()} category`}
+          value={newCat}
+          onChange={e => setNewCat(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && newCat.trim()) {
+              dispatch({ type: 'ADD_CATEGORY', group, name: newCat.trim() });
+              setNewCat('');
+            }
+          }}
+        />
+        <button
+          className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-sm"
+          onClick={() => { if (newCat.trim()) { dispatch({ type: 'ADD_CATEGORY', group, name: newCat.trim() }); setNewCat(''); } }}
+        >+</button>
+      </div>
+    </div>
+  );
+}
+
+function BudgetView({ monthKey }) {
+  return (
+    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
+      {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} />)}
+    </div>
+  );
+}
+
+function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
+  const { state } = useContext(BudgetContext);
+  const [date, setDate] = useState(initial.date || todayStr());
+  const [desc, setDesc] = useState(initial.description || '');
+  const [amount, setAmount] = useState(initial.amount !== undefined ? String(Math.abs(initial.amount)) : '');
+  const [group, setGroup] = useState(initial.group || 'Needs');
+  const [categoryId, setCategoryId] = useState(initial.categoryId || '');
+  const [toAccountId, setToAccountId] = useState(initial.toAccountId || '');
+  const [memo, setMemo] = useState(initial.memo || '');
+
+  const catOptions = state.categories.filter(c => c.group === group);
+  const otherAccounts = state.accounts.filter(a => a.id !== accountId);
+
+  function submit() {
+    const amt = parseFloat(amount);
+    if (!desc.trim() && group !== 'Transfer') return;
+    if (isNaN(amt)) return;
+    if (group === 'Transfer') {
+      if (!toAccountId) return;
+      onSubmit({ kind: 'transfer', date, amount: amt, toAccountId, memo });
+    } else {
+      const signedAmount = group === 'Deposits' ? Math.abs(amt) : -Math.abs(amt);
+      onSubmit({
+        kind: 'transaction',
+        date,
+        description: desc.trim() || (group === 'Deposits' ? 'Deposit' : 'Expense'),
+        amount: signedAmount,
+        group,
+        categoryId: group === 'Deposits' ? null : (categoryId || null),
+        memo,
+      });
+    }
+  }
+
+  return (
+    <tr className="bg-blue-50">
+      <td className="px-2 py-1"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="border rounded px-1 py-0.5 text-sm" /></td>
+      <td className="px-2 py-1">
+        {group === 'Transfer'
+          ? <span className="text-gray-400 text-sm italic">Transfer</span>
+          : <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description" className="border rounded px-1 py-0.5 text-sm w-full" />}
+      </td>
+      <td className="px-2 py-1"><input value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" className="border rounded px-1 py-0.5 text-sm w-24 text-right" /></td>
+      <td className="px-2 py-1">
+        <select value={group} onChange={e => { setGroup(e.target.value); setCategoryId(''); setToAccountId(''); }} className="border rounded px-1 py-0.5 text-sm">
+          {ALL_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+      </td>
+      <td className="px-2 py-1">
+        {group === 'Transfer' ? (
+          <select value={toAccountId} onChange={e => setToAccountId(e.target.value)} className="border rounded px-1 py-0.5 text-sm">
+            <option value="">— to account —</option>
+            {otherAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        ) : group !== 'Deposits' ? (
+          <select value={categoryId} onChange={e => setCategoryId(e.target.value)} className="border rounded px-1 py-0.5 text-sm">
+            <option value="">— category —</option>
+            {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        ) : <span className="text-gray-400 text-sm">—</span>}
+      </td>
+      <td className="px-2 py-1"><input value={memo} onChange={e => setMemo(e.target.value)} placeholder="Memo" className="border rounded px-1 py-0.5 text-sm w-full" /></td>
+      <td className="px-2 py-1"></td>
+      <td className="px-2 py-1 whitespace-nowrap">
+        <button onClick={submit} className="px-2 py-0.5 bg-blue-600 text-white rounded text-sm">{submitLabel}</button>
+        {onCancel && <button onClick={onCancel} className="px-2 py-0.5 ml-1 bg-gray-100 rounded text-sm">Cancel</button>}
+      </td>
+    </tr>
+  );
+}
+
+const BANK_SERVER = 'http://localhost:5112';
+
+function PlaidSetupModal({ onClose }) {
+  const [clientId, setClientId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [env, setEnv] = useState('sandbox');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await fetch(`${BANK_SERVER}/api/configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, secret, plaid_env: env }),
+      });
+      onClose();
+    } catch (e) {
+      alert('Could not reach bank sync server. Make sure it is running ("Start Bank Sync Server.bat").');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold mb-4">Setup Plaid Bank Sync</h3>
+        <div className="space-y-3 text-sm">
+          <p className="text-gray-600">Get credentials from <strong>dashboard.plaid.com</strong>. Use <em>Sandbox</em> to test without a real bank.</p>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Client ID</label>
+            <input autoFocus value={clientId} onChange={e => setClientId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Plaid client_id" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Secret</label>
+            <input type="password" value={secret} onChange={e => setSecret(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Plaid secret" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Environment</label>
+            <select value={env} onChange={e => setEnv(e.target.value)} className="w-full border rounded px-3 py-2 text-sm bg-white">
+              <option value="sandbox">Sandbox (test)</option>
+              <option value="development">Development</option>
+              <option value="production">Production</option>
+            </select>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button onClick={onClose} className="flex-1 border rounded py-2 text-gray-600 hover:bg-gray-50">Cancel</button>
+            <button onClick={save} disabled={saving || !clientId || !secret} className="flex-1 bg-blue-600 text-white rounded py-2 font-medium hover:bg-blue-700 disabled:opacity-40">
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BankSyncBar({ account }) {
+  const { dispatch } = useContext(BudgetContext);
+  const [status, setStatus] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+
+  const checkStatus = () => fetch(`${BANK_SERVER}/api/status`).then(r => r.json()).then(setStatus).catch(() => setStatus(null));
+  useEffect(() => { checkStatus(); }, []);
+
+  async function connect() {
+    try {
+      const res = await fetch(`${BANK_SERVER}/api/create_link_token`, { method: 'POST' }).then(r => r.json());
+      if (res.error) return alert(res.error);
+      const handler = Plaid.create({
+        token: res.link_token,
+        onSuccess: async (public_token) => {
+          await fetch(`${BANK_SERVER}/api/exchange_token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ public_token, account_name: account.name }),
+          });
+          checkStatus();
+        },
+        onExit: () => {},
+      });
+      handler.open();
+    } catch (e) {
+      alert('Bank sync server not running. Start it with "Start Bank Sync Server.bat"');
+    }
+  }
+
+  async function sync() {
+    setSyncing(true);
+    try {
+      const res = await fetch(`${BANK_SERVER}/api/sync_transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_name: account.name }),
+      }).then(r => r.json());
+      if (res.error) { alert(res.error); return; }
+      dispatch({ type: 'BANK_SYNC', accountId: account.id, added: res.added, removed: res.removed });
+      alert(`Synced! ${res.added.length} new, ${res.removed.length} removed.`);
+    } catch (e) {
+      alert('Sync failed — is the bank sync server running?');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function disconnect() {
+    if (!window.confirm(`Disconnect bank from "${account.name}"?`)) return;
+    await fetch(`${BANK_SERVER}/api/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_name: account.name }),
+    });
+    checkStatus();
+  }
+
+  const connected = status && status.connected_items && status.connected_items.includes(account.name);
+
+  if (!status) {
+    return (
+      <div className="px-4 py-2 border-b bg-gray-50 text-xs text-gray-400 flex items-center gap-2">
+        <span>Bank sync server not detected.</span>
+        <button onClick={() => setShowSetup(true)} className="text-blue-600 hover:underline">Configure Plaid</button>
+        {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
+      </div>
+    );
+  }
+  if (!status.configured) {
+    return (
+      <div className="px-4 py-2 border-b bg-gray-50 flex items-center gap-3 text-sm">
+        <span className="text-gray-500">Bank sync not configured.</span>
+        <button onClick={() => setShowSetup(true)} className="text-blue-600 hover:underline">Setup Plaid</button>
+        {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
+      </div>
+    );
+  }
+  return (
+    <div className="px-4 py-2 border-b bg-gray-50 flex items-center gap-3 text-sm">
+      {connected ? (
+        <>
+          <span className="text-emerald-600 font-medium">✓ Bank Connected</span>
+          <button onClick={sync} disabled={syncing} className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50 text-xs">
+            {syncing ? 'Syncing…' : 'Sync Now'}
+          </button>
+          <button onClick={disconnect} className="text-red-500 hover:underline text-xs">Disconnect</button>
+        </>
+      ) : (
+        <>
+          <span className="text-gray-500">No bank connected.</span>
+          <button onClick={connect} className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Connect Bank</button>
+        </>
+      )}
+      {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
+    </div>
+  );
+}
+
+function RegisterView({ accountId }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const account = state.accounts.find(a => a.id === accountId);
+  const txs = state.transactions.filter(t => t.accountId === accountId).sort((a, b) => a.date.localeCompare(b.date));
+  const [editingId, setEditingId] = useState(null);
+
+  let running = account ? account.startingBalance : 0;
+  const rows = txs.map(t => { running += t.amount; return { ...t, balance: running }; });
+
+  function catName(t) {
+    if (t.group === 'Deposits') return 'Deposit';
+    if (t.group === 'Transfer') return 'Transfer';
+    if (!t.group) return 'Needs categorizing';
+    const c = state.categories.find(c => c.id === t.categoryId);
+    return c ? c.name : '—';
+  }
+
+  function handleAdd(fields) {
+    if (fields.kind === 'transfer') {
+      const toAcc = state.accounts.find(a => a.id === fields.toAccountId);
+      dispatch({ type: 'ADD_TRANSFER', date: fields.date, fromAccountId: accountId, toAccountId: fields.toAccountId, fromName: account.name, toName: toAcc ? toAcc.name : '', amount: fields.amount, memo: fields.memo });
+    } else {
+      dispatch({ type: 'ADD_TRANSACTION', tx: { date: fields.date, accountId, description: fields.description, amount: fields.amount, group: fields.group, categoryId: fields.categoryId, memo: fields.memo } });
+    }
+  }
+
+  function handleUpdate(id, fields) {
+    if (fields.kind === 'transaction') {
+      dispatch({ type: 'UPDATE_TRANSACTION', id, patch: { date: fields.date, description: fields.description, amount: fields.amount, group: fields.group, categoryId: fields.categoryId, memo: fields.memo } });
+    }
+    setEditingId(null);
+  }
+
+  return (
+    <div className="p-6">
+      <h2 className="text-xl font-semibold mb-1">{account ? account.name : 'Account'}</h2>
+      <div className={`mb-4 text-lg ${moneyClass(accountBalance(state, accountId))}`}>{fmt(accountBalance(state, accountId))}</div>
+      <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+        {account && <BankSyncBar account={account} />}
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-500 text-xs border-b bg-gray-50">
+              <th className="text-left px-2 py-2 font-normal">Date</th>
+              <th className="text-left px-2 py-2 font-normal">Description</th>
+              <th className="text-right px-2 py-2 font-normal">Amount</th>
+              <th className="text-left px-2 py-2 font-normal">Group</th>
+              <th className="text-left px-2 py-2 font-normal">Category</th>
+              <th className="text-left px-2 py-2 font-normal">Memo</th>
+              <th className="text-right px-2 py-2 font-normal">Balance</th>
+              <th className="px-2 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <TxEditorRow key="new" accountId={accountId} initial={{}} onSubmit={handleAdd} submitLabel="Add" />
+            {rows.slice().reverse().map(t => (
+              editingId === t.id ? (
+                <TxEditorRow
+                  key={t.id}
+                  accountId={accountId}
+                  initial={t}
+                  onSubmit={(fields) => handleUpdate(t.id, fields)}
+                  onCancel={() => setEditingId(null)}
+                  submitLabel="Save"
+                />
+              ) : (
+                <tr key={t.id} className={`border-b last:border-0 hover:bg-gray-50 group ${!t.group ? 'bg-orange-50' : ''}`}>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{t.date}</td>
+                  <td className="px-2 py-1.5">{t.description}</td>
+                  <td className={`px-2 py-1.5 text-right ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+                  <td className="px-2 py-1.5">{t.group || '—'}</td>
+                  <td className={`px-2 py-1.5 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+                  <td className="px-2 py-1.5 text-gray-500">{t.memo}</td>
+                  <td className={`px-2 py-1.5 text-right ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {t.group !== 'Transfer' && (
+                      <button
+                        className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-blue-500 text-xs mr-2"
+                        onClick={() => setEditingId(t.id)}
+                      >edit</button>
+                    )}
+                    <button
+                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 text-xs"
+                      onClick={() => dispatch({ type: 'DELETE_TRANSACTION', id: t.id })}
+                    >✕</button>
+                  </td>
+                </tr>
+              )
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AllAccountsView({ setView }) {
+  const { state } = useContext(BudgetContext);
+  const accName = (id) => { const a = state.accounts.find(a => a.id === id); return a ? a.name : '—'; };
+  function catName(t) {
+    if (t.group === 'Deposits') return 'Deposit';
+    if (t.group === 'Transfer') return 'Transfer';
+    if (!t.group) return 'Needs categorizing';
+    const c = state.categories.find(c => c.id === t.categoryId);
+    return c ? c.name : '—';
+  }
+  const rows = state.transactions.slice().sort((a, b) => b.date.localeCompare(a.date));
+
+  return (
+    <div className="p-6">
+      <h2 className="text-xl font-semibold mb-4">All Accounts</h2>
+      <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-500 text-xs border-b bg-gray-50">
+              <th className="text-left px-2 py-2 font-normal">Date</th>
+              <th className="text-left px-2 py-2 font-normal">Account</th>
+              <th className="text-left px-2 py-2 font-normal">Description</th>
+              <th className="text-right px-2 py-2 font-normal">Amount</th>
+              <th className="text-left px-2 py-2 font-normal">Group</th>
+              <th className="text-left px-2 py-2 font-normal">Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(t => (
+              <tr
+                key={t.id}
+                className={`border-b last:border-0 hover:bg-gray-50 cursor-pointer ${!t.group ? 'bg-orange-50' : ''}`}
+                onClick={() => setView({ type: 'register', accountId: t.accountId })}
+              >
+                <td className="px-2 py-1.5 whitespace-nowrap">{t.date}</td>
+                <td className="px-2 py-1.5">{accName(t.accountId)}</td>
+                <td className="px-2 py-1.5">{t.description}</td>
+                <td className={`px-2 py-1.5 text-right ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+                <td className="px-2 py-1.5">{t.group || '—'}</td>
+                <td className={`px-2 py-1.5 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan="6" className="px-2 py-6 text-center text-gray-400">No transactions yet</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ReportsView({ monthKey }) {
+  const { state } = useContext(BudgetContext);
+
+  const monthTxs = state.transactions.filter(t => monthKeyOf(t.date) === monthKey);
+  const income = monthTxs.filter(t => t.group === 'Deposits').reduce((s, t) => s + t.amount, 0);
+  const expenseTxs = monthTxs.filter(t => t.group !== 'Deposits' && t.group !== 'Transfer');
+  const expense = -expenseTxs.reduce((s, t) => s + t.amount, 0);
+  const net = income - expense;
+
+  const byCategory = {};
+  for (const t of expenseTxs) {
+    const key = t.categoryId || 'uncategorized';
+    byCategory[key] = (byCategory[key] || 0) + (-t.amount);
+  }
+  const catRows = Object.entries(byCategory)
+    .map(([catId, amt]) => {
+      const c = state.categories.find(c => c.id === catId);
+      return { name: c ? c.name : 'Uncategorized', group: c ? c.group : '—', amt };
+    })
+    .sort((a, b) => b.amt - a.amt);
+  const maxAmt = catRows.length ? catRows[0].amt : 0;
+
+  return (
+    <div className="p-6 max-w-3xl">
+      <h2 className="text-xl font-semibold mb-4">Reports — {monthLabel(monthKey)}</h2>
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <div className="text-xs text-gray-500">Income</div>
+          <div className="text-lg font-semibold text-emerald-700">{fmt(income)}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <div className="text-xs text-gray-500">Expenses</div>
+          <div className="text-lg font-semibold text-red-600">{fmt(-expense)}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <div className="text-xs text-gray-500">Net</div>
+          <div className={`text-lg font-semibold ${moneyClass(net)}`}>{fmt(net)}</div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border p-4">
+        <div className="font-medium mb-3">Spending by Category</div>
+        {catRows.length === 0 && <div className="text-gray-400 text-sm">No spending recorded this month</div>}
+        {catRows.map(r => (
+          <div key={r.name} className="mb-2">
+            <div className="flex justify-between text-sm mb-0.5">
+              <span>{r.name} <span className="text-gray-400">({r.group})</span></span>
+              <span className="font-medium">{fmt(r.amt)}</span>
+            </div>
+            <div className="h-2 bg-gray-100 rounded">
+              <div className="h-2 bg-blue-500 rounded" style={{ width: `${maxAmt ? (r.amt / maxAmt) * 100 : 0}%` }}></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [state, dispatch] = useReducer(reducer, null, loadInitial);
+  const [view, setView] = useState({ type: 'budget' });
+  const [monthKey, setMonthKey] = useState(todayMonthKey());
+
+  useEffect(() => {
+    localStorage.setItem('simplebudget1', JSON.stringify(state));
+  }, [state]);
+
+  return (
+    <BudgetContext.Provider value={{ state, dispatch }}>
+      <div className="flex">
+        <Sidebar view={view} setView={setView} monthKey={monthKey} setMonthKey={setMonthKey} />
+        <div className="flex-1 h-screen overflow-y-auto">
+          {view.type === 'budget' && <BudgetView monthKey={monthKey} />}
+          {view.type === 'register' && <RegisterView accountId={view.accountId} />}
+          {view.type === 'all-accounts' && <AllAccountsView setView={setView} />}
+          {view.type === 'reports' && <ReportsView monthKey={monthKey} />}
+        </div>
+      </div>
+    </BudgetContext.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
