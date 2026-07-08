@@ -33,19 +33,23 @@ PROFILE_DIR = ROOT / "bank_browser_profile"
 BANK_URL = "https://stateexchangebank.com/index.html"
 SERVER = "http://localhost:5112"
 
-REQUIRED_FIELDS = ["access_id", "password", "bank_account_name", "account_name"]
-
-
 def load_creds():
     if not CREDS_FILE.exists():
         print(f"Missing {CREDS_FILE.name}.")
         print(f"Copy bank_credentials.example.json to bank_credentials.json and fill in your real login.")
         sys.exit(1)
     creds = json.loads(CREDS_FILE.read_text())
-    missing = [f for f in REQUIRED_FIELDS if not creds.get(f)]
+    missing = [f for f in ("access_id", "password") if not creds.get(f)]
+    accounts = creds.get("accounts") or []
+    if not accounts:
+        missing.append("accounts (non-empty list)")
+    for a in accounts:
+        if not a.get("bank_account_name") or not a.get("account_name"):
+            missing.append("accounts[].bank_account_name/account_name")
+            break
     if missing:
-        print(f"{CREDS_FILE.name} is missing: {', '.join(missing)}")
-        print("Add those fields (see bank_credentials.example.json for the format) and try again.")
+        print(f"{CREDS_FILE.name} is missing or malformed: {', '.join(missing)}")
+        print("See bank_credentials.example.json for the expected format.")
         sys.exit(1)
     return creds
 
@@ -129,13 +133,13 @@ def do_login(page, creds):
 
 
 def download_csv(page, bank_account_name):
-    # Use the "Accounts" nav dropdown to get to the specific account, rather
-    # than relying on whatever page happens to load after login.
-    if page.locator("text=Download").count() == 0:
-        page.click("nav >> text=Accounts")
-        page.wait_for_timeout(800)
-        page.click(f"text={bank_account_name}")
-        page.wait_for_timeout(1500)
+    # Always go through the "Accounts" nav dropdown to reach the specific
+    # account -- needed every time, since after finishing one account in a
+    # multi-account run we're still sitting on that account's Activity page.
+    page.click("nav >> text=Accounts")
+    page.wait_for_timeout(800)
+    page.click(f"text={bank_account_name}")
+    page.wait_for_timeout(1500)
     page.click("text=Download")
     page.wait_for_timeout(1000)
     # "Spreadsheet CSV" is the default format per the bank's export menu.
@@ -163,28 +167,30 @@ def import_to_server(account_name, csv_text):
 
 def run():
     creds = load_creds()
-    csv_text = None
     with sync_playwright() as pw:
         context, page = open_bank_page(pw)
         try:
             if not is_logged_in(page):
                 do_login(page, creds)
-            print("Downloading CSV export...")
-            csv_text = download_csv(page, creds["bank_account_name"])
-            print("Download captured.")
-        except Exception as e:
-            screenshot = ROOT / "bank_scraper_error.png"
-            page.screenshot(path=str(screenshot))
-            print(f"Something didn't match on the page. Screenshot saved to {screenshot}")
-            print(f"Error: {e}")
+
+            for acc in creds["accounts"]:
+                bank_name = acc["bank_account_name"]
+                app_name = acc["account_name"]
+                print(f"\n=== {bank_name} -> {app_name} ===")
+                try:
+                    print("Downloading CSV export...")
+                    csv_text = download_csv(page, bank_name)
+                    print("Download captured. Sending to Simple Budget server...")
+                    result = import_to_server(app_name, csv_text)
+                    print(f"Imported {result['added']} new transactions ({result['parsed']} total in the export).")
+                except Exception as e:
+                    screenshot = ROOT / f"bank_scraper_error_{bank_name.replace(' ', '_')}.png"
+                    page.screenshot(path=str(screenshot))
+                    print(f"Something didn't work for {bank_name}. Screenshot saved to {screenshot}")
+                    print(f"Error: {e}")
+                    continue  # keep going with the remaining accounts
         finally:
             context.close()
-
-    if csv_text is None:
-        return
-    print("Sending to Simple Budget server...")
-    result = import_to_server(creds["account_name"], csv_text)
-    print(f"Imported {result['added']} new transactions ({result['parsed']} total in the export).")
 
 
 if __name__ == "__main__":
