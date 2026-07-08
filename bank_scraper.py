@@ -68,27 +68,45 @@ def open_bank_page(pw):
     return context, page
 
 
+def find_login_frame(page, timeout_ms=8000):
+    # The login form is served by a third-party banking platform
+    # (seblo.banking.apiture.com, per Chrome's saved-password suggestion)
+    # embedded in an iframe -- Playwright won't reach into it via page.*
+    # locators, which is why DevTools could "see" #aid but the script
+    # couldn't interact with it. Find that frame specifically.
+    waited = 0
+    while waited < timeout_ms:
+        for frame in page.frames:
+            url = frame.url or ""
+            if "apiture" in url or "seblo" in url:
+                return frame
+        page.wait_for_timeout(300)
+        waited += 300
+    return page  # fallback: maybe it really is on the main page
+
+
 def do_login(page, creds):
     print("Not logged in yet -- logging in...")
     page.click("text=Sign in to Online Banking")
+    target = find_login_frame(page)
 
     try:
         # Confirmed via live DevTools inspection: the Access ID field is
         # <input id="aid">. Target it directly -- exact and unambiguous,
         # unlike placeholder/type-based guesses which kept timing out.
-        page.wait_for_selector("#aid", state="visible", timeout=10000)
-        page.locator("#aid").fill(creds["access_id"])
+        target.wait_for_selector("#aid", state="visible", timeout=10000)
+        target.locator("#aid").fill(creds["access_id"])
         # Password field's id wasn't confirmed, so fall back to placeholder
         # matching with .first to dodge any hidden-duplicate ambiguity, and
         # force=True to skip animation-stability checks that may be racing
         # a modal fade-in.
-        pw_field = page.get_by_placeholder("Password").first
+        pw_field = target.get_by_placeholder("Password").first
         pw_field.wait_for(state="visible", timeout=10000)
         try:
             pw_field.fill(creds["password"])
         except Exception:
             pw_field.fill(creds["password"], force=True)
-        page.click("text=Log In")
+        target.locator("text=Log In").click()
         print("Auto-filled login form.")
     except Exception as e:
         screenshot = ROOT / "bank_scraper_login_error.png"
