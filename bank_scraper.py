@@ -153,11 +153,19 @@ def download_csv(page, bank_account_name):
     path = ROOT / "last_bank_export.csv"
     download.save_as(str(path))
 
-    # Close the Download dialog -- it stays open after downloading and would
-    # otherwise block clicking into the next account. Escape is more robust
-    # than guessing the close button's selector.
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(500)
+    # Close the Download dialog -- confirmed via error logs it's an Angular
+    # <ngb-modal-window> that ignores a plain Escape keypress and otherwise
+    # blocks clicking into the next account ("intercepts pointer events").
+    modal = page.locator("ngb-modal-window")
+    for selector in ["[aria-label='Close']", "button.close", "button"]:
+        btn = modal.locator(selector).first
+        if btn.count():
+            try:
+                btn.click(timeout=2000)
+                break
+            except Exception:
+                continue
+    page.wait_for_selector("ngb-modal-window", state="detached", timeout=5000)
 
     return path.read_text()
 
