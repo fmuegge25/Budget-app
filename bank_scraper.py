@@ -19,6 +19,7 @@ Run with: python bank_scraper.py
 
 import json
 import sys
+import traceback
 import urllib.request
 from pathlib import Path
 
@@ -51,18 +52,33 @@ def interactive_login(pw, creds):
     page = context.new_page()
     page.goto(BANK_URL, wait_until="domcontentloaded")
     page.click("text=Sign in to Online Banking")
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(1200)
 
-    inputs = page.locator("input:visible")
-    inputs.nth(0).fill(creds["access_id"])
-    inputs.nth(1).fill(creds["password"])
-    page.click("text=Log In")
+    # Scope to the login modal specifically (id="loginModal" per the bank's markup)
+    # so we never accidentally target an unrelated input elsewhere on the page.
+    modal = page.locator("#loginModal")
+    if modal.count() == 0:
+        modal = page  # fallback: whole page, if the modal id guess is wrong
+    try:
+        inputs = modal.locator("input:visible")
+        if inputs.count() >= 2:
+            inputs.nth(0).fill(creds["access_id"])
+            inputs.nth(1).fill(creds["password"])
+            page.click("text=Log In")
+            print("Auto-filled login form.")
+        else:
+            print(f"Couldn't find the login fields automatically (found {inputs.count()}).")
+            print("Please type your Access ID and Password into the browser window yourself.")
+    except Exception as e:
+        print(f"Auto-fill didn't work ({e}). Please type your Access ID and Password into the browser window yourself.")
 
     print()
     print("If your bank asks for a passcode or MFA step, complete it now in the browser window.")
-    input("Press Enter here once you're fully logged in and can see your Activity page... ")
+    print("Make sure you can see your account Activity page before continuing.")
+    input("Press Enter here once you're fully logged in... ")
 
     context.storage_state(path=str(SESSION_FILE))
+    print("Session saved.")
     return browser, context, page
 
 
@@ -108,25 +124,36 @@ def import_to_server(account_name, csv_text):
         return json.loads(resp.read().decode())
 
 
-def main():
+def run():
     creds = load_creds()
+    csv_text = None
     with sync_playwright() as pw:
         browser, context, page = get_authenticated_page(pw, creds)
         try:
+            print("Downloading CSV export...")
             csv_text = download_csv(page)
+            print("Download captured.")
         except Exception as e:
             screenshot = ROOT / "bank_scraper_error.png"
             page.screenshot(path=str(screenshot))
             print(f"Something didn't match on the page. Screenshot saved to {screenshot}")
             print(f"Error: {e}")
-            sys.exit(1)
         finally:
             context.close()
             browser.close()
 
+    if csv_text is None:
+        return
+    print("Sending to Simple Budget server...")
     result = import_to_server(creds["account_name"], csv_text)
     print(f"Imported {result['added']} new transactions ({result['parsed']} total in the export).")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        run()
+    except Exception:
+        print("\n--- Something went wrong ---")
+        traceback.print_exc()
+    finally:
+        input("\nPress Enter to close this window... ")
