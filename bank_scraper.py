@@ -73,11 +73,21 @@ def do_login(page, creds):
     page.click("text=Sign in to Online Banking")
 
     try:
-        # The Password field isn't actually type="password" in this bank's
-        # markup (confirmed via screenshot), so target both fields by their
-        # placeholder text instead -- fill() auto-waits for them to appear.
-        page.get_by_placeholder("Access ID").fill(creds["access_id"])
-        page.get_by_placeholder("Password").fill(creds["password"])
+        # Confirmed via live DevTools inspection: the Access ID field is
+        # <input id="aid">. Target it directly -- exact and unambiguous,
+        # unlike placeholder/type-based guesses which kept timing out.
+        page.wait_for_selector("#aid", state="visible", timeout=10000)
+        page.locator("#aid").fill(creds["access_id"])
+        # Password field's id wasn't confirmed, so fall back to placeholder
+        # matching with .first to dodge any hidden-duplicate ambiguity, and
+        # force=True to skip animation-stability checks that may be racing
+        # a modal fade-in.
+        pw_field = page.get_by_placeholder("Password").first
+        pw_field.wait_for(state="visible", timeout=10000)
+        try:
+            pw_field.fill(creds["password"])
+        except Exception:
+            pw_field.fill(creds["password"], force=True)
         page.click("text=Log In")
         print("Auto-filled login form.")
     except Exception as e:
