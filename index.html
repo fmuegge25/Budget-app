@@ -320,7 +320,7 @@ function EditableMoney({ value, onCommit, className }) {
         const n = parseFloat(text.replace(/[^0-9.\-]/g, ''));
         onCommit(isNaN(n) ? 0 : n);
       }}
-      className={`w-24 text-right bg-transparent border-b border-transparent focus:border-gray-400 outline-none ${className || ''}`}
+      className={`text-right bg-transparent border-b border-transparent focus:border-gray-400 outline-none ${className || 'w-24'}`}
       placeholder="0.00"
     />
   );
@@ -385,6 +385,12 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
         >
           All Accounts
         </button>
+        <button
+          onClick={() => setView({ type: 'manage-categories' })}
+          className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'manage-categories' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
+        >
+          Manage Categories
+        </button>
       </div>
 
       <div className="hidden md:block px-4 py-2 text-xs uppercase tracking-wide text-gray-400 mt-2">Accounts</div>
@@ -443,76 +449,84 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
 
 function GroupCard({ group, monthKey }) {
   const { state, dispatch } = useContext(BudgetContext);
-  const [newCat, setNewCat] = useState('');
   const cats = state.categories.filter(c => c.group === group);
 
-  let totalAssigned = 0, totalRemaining = 0, totalCarry = 0;
+  let totalAssigned = 0, totalRemaining = 0;
 
   return (
     <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
       <div className="px-4 py-2 bg-gray-800 text-white font-semibold">{group}</div>
-      <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-gray-500 text-xs border-b">
-            <th className="text-left px-3 py-1 font-normal">Category</th>
-            <th className="text-right px-3 py-1 font-normal">Carryover</th>
-            <th className="text-right px-3 py-1 font-normal">Assigned</th>
-            <th className="text-right px-3 py-1 font-normal">Remaining</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cats.map(c => {
-            const row = computeCategoryHistory(state, c.id, monthKey);
-            totalAssigned += row.assigned; totalRemaining += row.remaining; totalCarry += row.carryIn;
-            return (
-              <tr key={c.id} className="border-b last:border-0 hover:bg-gray-50 group">
-                <td className="px-3 py-1.5">
-                  <div className="flex items-center justify-between">
-                    <span>{c.name}</span>
-                    <span className="opacity-0 group-hover:opacity-100 flex items-center gap-1 shrink-0">
-                      <button className="text-gray-300 hover:text-gray-600 text-xs px-0.5" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
-                      <button className="text-gray-300 hover:text-gray-600 text-xs px-0.5" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
-                      <button
-                        className="text-gray-300 hover:text-blue-500 text-xs px-1"
-                        onClick={() => {
-                          const name = window.prompt('Rename category', c.name);
-                          if (name && name.trim()) dispatch({ type: 'RENAME_CATEGORY', id: c.id, name: name.trim() });
-                        }}
-                      >rename</button>
-                      <button
-                        className="text-gray-300 hover:text-red-500 text-xs px-1"
-                        onClick={() => {
-                          if (window.confirm(`Delete category "${c.name}"? Existing transactions keep their tag but it'll disappear from this view.`)) {
-                            dispatch({ type: 'DELETE_CATEGORY', id: c.id });
-                          }
-                        }}
-                      >✕</button>
-                    </span>
-                  </div>
-                </td>
-                <td className={`px-3 py-1.5 text-right ${moneyClass(row.carryIn)}`}>{fmt(row.carryIn)}</td>
-                <td className="px-3 py-1.5 text-right">
-                  <EditableMoney
-                    value={row.assigned}
-                    onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
-                  />
-                </td>
-                <td className={`px-3 py-1.5 text-right font-medium ${moneyClass(row.remaining)}`}>{fmt(row.remaining)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-        <tfoot>
-          <tr className="border-t bg-gray-50 font-semibold">
-            <td className="px-3 py-1.5">Total</td>
-            <td className={`px-3 py-1.5 text-right ${moneyClass(totalCarry)}`}>{fmt(totalCarry)}</td>
-            <td className="px-3 py-1.5 text-right">{fmt(totalAssigned)}</td>
-            <td className={`px-3 py-1.5 text-right ${moneyClass(totalRemaining)}`}>{fmt(totalRemaining)}</td>
-          </tr>
-        </tfoot>
-      </table>
+      <div>
+        {cats.map(c => {
+          const row = computeCategoryHistory(state, c.id, monthKey);
+          totalAssigned += row.assigned; totalRemaining += row.remaining;
+          return (
+            <div key={c.id} className="flex items-center justify-between px-3 py-2 border-b last:border-0 text-sm gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate">{c.name}</div>
+                {row.carryIn !== 0 && <div className={`text-xs ${moneyClass(row.carryIn)}`}>carryover {fmt(row.carryIn)}</div>}
+              </div>
+              <EditableMoney
+                value={row.assigned}
+                onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
+                className="w-16 shrink-0"
+              />
+              <span className={`w-20 shrink-0 text-right font-medium ${moneyClass(row.remaining)}`}>{fmt(row.remaining)}</span>
+            </div>
+          );
+        })}
       </div>
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 font-semibold text-sm">
+        <span>Total</span>
+        <span className="flex items-center gap-2">
+          <span className="w-16 text-right">{fmt(totalAssigned)}</span>
+          <span className={`w-20 text-right ${moneyClass(totalRemaining)}`}>{fmt(totalRemaining)}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function BudgetView({ monthKey }) {
+  return (
+    <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
+      {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} />)}
+    </div>
+  );
+}
+
+function ManageCategoriesGroup({ group }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const [newCat, setNewCat] = useState('');
+  const cats = state.categories.filter(c => c.group === group);
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+      <div className="px-4 py-2 bg-gray-800 text-white font-semibold">{group}</div>
+      {cats.map(c => (
+        <div key={c.id} className="flex items-center justify-between px-3 py-2 border-b last:border-0 text-sm gap-2">
+          <span className="truncate flex-1">{c.name}</span>
+          <span className="flex items-center gap-2 shrink-0">
+            <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
+            <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
+            <button
+              className="text-blue-500 hover:underline px-1"
+              onClick={() => {
+                const name = window.prompt('Rename category', c.name);
+                if (name && name.trim()) dispatch({ type: 'RENAME_CATEGORY', id: c.id, name: name.trim() });
+              }}
+            >rename</button>
+            <button
+              className="text-red-500 hover:underline px-1"
+              onClick={() => {
+                if (window.confirm(`Delete category "${c.name}"? Existing transactions keep their tag but it'll disappear from Budget/Categorize views.`)) {
+                  dispatch({ type: 'DELETE_CATEGORY', id: c.id });
+                }
+              }}
+            >delete</button>
+          </span>
+        </div>
+      ))}
       <div className="p-2 border-t flex gap-1">
         <input
           className="flex-1 border rounded px-2 py-1 text-sm"
@@ -535,10 +549,11 @@ function GroupCard({ group, monthKey }) {
   );
 }
 
-function BudgetView({ monthKey }) {
+function ManageCategoriesView() {
   return (
-    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-      {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} />)}
+    <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
+      <h2 className="text-xl font-semibold col-span-full mb-0">Manage Categories</h2>
+      {GROUPS.map(g => <ManageCategoriesGroup key={g} group={g} />)}
     </div>
   );
 }
@@ -1151,6 +1166,7 @@ function App() {
           {view.type === 'all-accounts' && <AllAccountsView setView={setView} />}
           {view.type === 'reports' && <ReportsView monthKey={monthKey} />}
           {view.type === 'categorize' && <CategorizeView />}
+          {view.type === 'manage-categories' && <ManageCategoriesView />}
         </div>
       </div>
     </BudgetContext.Provider>
