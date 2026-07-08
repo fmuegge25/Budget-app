@@ -32,12 +32,21 @@ BANK_URL = "https://stateexchangebank.com/index.html"
 SERVER = "http://localhost:5112"
 
 
+REQUIRED_FIELDS = ["access_id", "password", "bank_account_name", "account_name"]
+
+
 def load_creds():
     if not CREDS_FILE.exists():
         print(f"Missing {CREDS_FILE.name}.")
         print(f"Copy bank_credentials.example.json to bank_credentials.json and fill in your real login.")
         sys.exit(1)
-    return json.loads(CREDS_FILE.read_text())
+    creds = json.loads(CREDS_FILE.read_text())
+    missing = [f for f in REQUIRED_FIELDS if not creds.get(f)]
+    if missing:
+        print(f"{CREDS_FILE.name} is missing: {', '.join(missing)}")
+        print("Add those fields (see bank_credentials.example.json for the format) and try again.")
+        sys.exit(1)
+    return creds
 
 
 def is_logged_in(page):
@@ -54,14 +63,11 @@ def interactive_login(pw, creds):
     page.click("text=Sign in to Online Banking")
 
     try:
-        # The password field is unambiguous (exactly one on the page), and we
-        # wait for it explicitly instead of guessing a fixed delay -- the modal
-        # has a fade-in animation that a blind timeout kept racing against.
-        page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
-        password_field = page.locator("input[type='password']:visible").first
-        access_field = page.locator("input[type='text']:visible, input:not([type]):visible").first
-        access_field.fill(creds["access_id"])
-        password_field.fill(creds["password"])
+        # The Password field isn't actually type="password" in this bank's
+        # markup (confirmed via screenshot), so target both fields by their
+        # placeholder text instead -- fill() auto-waits for them to appear.
+        page.get_by_placeholder("Access ID").fill(creds["access_id"])
+        page.get_by_placeholder("Password").fill(creds["password"])
         page.click("text=Log In")
         print("Auto-filled login form.")
     except Exception as e:
@@ -72,8 +78,17 @@ def interactive_login(pw, creds):
 
     print()
     print("If your bank asks for a passcode or MFA step, complete it now in the browser window.")
-    print("Make sure you can see your account Activity page before continuing.")
-    input("Press Enter here once you're fully logged in... ")
+    print("Waiting for login to finish on its own (up to 5 minutes) -- no need to press anything here.")
+    waited = 0
+    while waited < 300:
+        if is_logged_in(page):
+            print("Login detected.")
+            break
+        page.wait_for_timeout(1000)
+        waited += 1
+    else:
+        print("Didn't detect a successful login after 5 minutes.")
+        input("Press Enter here once you're fully logged in... ")
 
     context.storage_state(path=str(SESSION_FILE))
     print("Session saved.")
