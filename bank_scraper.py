@@ -152,6 +152,13 @@ def download_csv(page, bank_account_name):
     download = dl_info.value
     path = ROOT / "last_bank_export.csv"
     download.save_as(str(path))
+
+    # Close the Download dialog -- it stays open after downloading and would
+    # otherwise block clicking into the next account. Escape is more robust
+    # than guessing the close button's selector.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+
     return path.read_text()
 
 
