@@ -52,25 +52,21 @@ def interactive_login(pw, creds):
     page = context.new_page()
     page.goto(BANK_URL, wait_until="domcontentloaded")
     page.click("text=Sign in to Online Banking")
-    page.wait_for_timeout(1200)
 
-    # Scope to the login modal specifically (id="loginModal" per the bank's markup)
-    # so we never accidentally target an unrelated input elsewhere on the page.
-    modal = page.locator("#loginModal")
-    if modal.count() == 0:
-        modal = page  # fallback: whole page, if the modal id guess is wrong
     try:
-        inputs = modal.locator("input:visible")
-        if inputs.count() >= 2:
-            inputs.nth(0).fill(creds["access_id"])
-            inputs.nth(1).fill(creds["password"])
-            page.click("text=Log In")
-            print("Auto-filled login form.")
-        else:
-            print(f"Couldn't find the login fields automatically (found {inputs.count()}).")
-            print("Please type your Access ID and Password into the browser window yourself.")
+        # The password field is unambiguous (exactly one on the page), and we
+        # wait for it explicitly instead of guessing a fixed delay -- the modal
+        # has a fade-in animation that a blind timeout kept racing against.
+        page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
+        password_field = page.locator("input[type='password']:visible").first
+        access_field = page.locator("input[type='text']:visible, input:not([type]):visible").first
+        access_field.fill(creds["access_id"])
+        password_field.fill(creds["password"])
+        page.click("text=Log In")
+        print("Auto-filled login form.")
     except Exception as e:
-        print(f"Auto-fill didn't work ({e}). Please type your Access ID and Password into the browser window yourself.")
+        print(f"Auto-fill didn't work ({e}).")
+        print("Please type your Access ID and Password into the browser window yourself.")
 
     print()
     print("If your bank asks for a passcode or MFA step, complete it now in the browser window.")
