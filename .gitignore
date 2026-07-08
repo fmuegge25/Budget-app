@@ -1,5 +1,6 @@
 plaid_config.json
 budget_data.json
+budget_data.backup.json
 bank_credentials.json
 bank_session_state.json
 bank_browser_profile/
