@@ -154,15 +154,27 @@ def download_csv(page, bank_account_name):
     download.save_as(str(path))
     csv_text = path.read_text()
 
-    # Guessing at the Download dialog's close button kept failing (it's an
-    # Angular ngb-modal-window that ignores Escape and blocks clicks
-    # underneath it). Reloading all the way to BANK_URL landed on the public
-    # marketing site (a different domain than the actual banking app),
-    # losing the authenticated view -- so instead click "Home" in the
-    # authenticated app's own nav bar, which clears the modal via normal
-    # SPA routing without ever leaving the banking session.
-    page.click("nav >> text=Home")
-    page.wait_for_timeout(1000)
+    # Close the Download dialog. Confirmed via user screenshot: it's a
+    # literal "x" glyph top-right of the modal (not necessarily a real
+    # <button>, which is why button/aria-label guesses kept failing).
+    closed = False
+    for selector in ["text=×", "text=x"]:
+        btn = page.locator("ngb-modal-window").get_by_text(selector.split("=", 1)[1], exact=True).first
+        if btn.count():
+            try:
+                btn.click(timeout=2000)
+                page.wait_for_selector("ngb-modal-window", state="detached", timeout=3000)
+                closed = True
+                break
+            except Exception:
+                continue
+    if not closed:
+        # Fallback: "Home" in the authenticated app's own nav clears the
+        # modal via normal SPA routing without leaving the banking session
+        # (unlike reloading BANK_URL, which lands on the public marketing
+        # site and loses the authenticated view).
+        page.click("nav >> text=Home")
+        page.wait_for_timeout(1000)
 
     return csv_text
 
