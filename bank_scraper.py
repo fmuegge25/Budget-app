@@ -100,9 +100,11 @@ def get_authenticated_page(pw, creds):
 
 
 def download_csv(page, bank_account_name):
-    # After login you land on the accounts overview, not a specific account's
-    # Activity page -- click into the right account first.
+    # Use the "Accounts" nav dropdown to get to the specific account, rather
+    # than relying on whatever page happens to load after login.
     if page.locator("text=Download").count() == 0:
+        page.click("nav >> text=Accounts")
+        page.wait_for_timeout(800)
         page.click(f"text={bank_account_name}")
         page.wait_for_timeout(1500)
     page.click("text=Download")
