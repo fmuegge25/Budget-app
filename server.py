@@ -120,9 +120,9 @@ def import_csv():
     account_name = body.get("account_name")
     csv_text = body.get("csv_text", "")
 
-    if not STATE_FILE.exists():
-        return jsonify({"error": "No budget data yet — open the app once first"}), 400
-    data = json.loads(STATE_FILE.read_text())
+    data = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
+    if not data:
+        return jsonify({"error": "No budget data yet — open the app once in a browser first, then re-run this"}), 400
 
     account = next((a for a in data["accounts"] if a["name"] == account_name), None)
     if not account:
