@@ -84,7 +84,10 @@ def interactive_login(pw, creds):
 
 def get_authenticated_page(pw, creds):
     if SESSION_FILE.exists():
-        browser = pw.chromium.launch(headless=True)
+        # Headless gets blocked by the bank's bot protection (403), so stay
+        # visible even on session-reuse runs -- it's still fully automatic,
+        # just not invisible.
+        browser = pw.chromium.launch(headless=False)
         context = browser.new_context(storage_state=str(SESSION_FILE))
         page = context.new_page()
         page.goto(BANK_URL, wait_until="domcontentloaded")
