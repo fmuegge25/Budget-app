@@ -9,10 +9,12 @@ Setup (one-time):
   2. Fill in your real Access ID / password / the app account name it maps to
      (bank_credentials.json is gitignored -- it never leaves this machine)
 
-First run: a visible browser window opens so you can complete any MFA/passcode
-prompt yourself. After that, your session is saved to bank_session_state.json
-and future runs are fully unattended (headless) until that session expires,
-at which point it falls back to a visible window again automatically.
+Uses a persistent browser profile (like a real Chrome profile that stays
+logged in) rather than exporting/reimporting cookies into a fresh browser
+each run -- banks trust an actual returning browser far more than a
+freshly-spawned one with copied-in cookies, so this should need far fewer
+manual logins over time. First run still needs you to log in / handle any
+passcode once; after that the same profile is reused automatically.
 
 Run with: python bank_scraper.py
 """
@@ -27,10 +29,9 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
 CREDS_FILE = ROOT / "bank_credentials.json"
-SESSION_FILE = ROOT / "bank_session_state.json"
+PROFILE_DIR = ROOT / "bank_browser_profile"
 BANK_URL = "https://stateexchangebank.com/index.html"
 SERVER = "http://localhost:5112"
-
 
 REQUIRED_FIELDS = ["access_id", "password", "bank_account_name", "account_name"]
 
@@ -54,12 +55,21 @@ def is_logged_in(page):
     return page.locator("text=Sign in to Online Banking").count() == 0
 
 
-def interactive_login(pw, creds):
-    print("Opening a visible browser window for login...")
-    browser = pw.chromium.launch(headless=False)
-    context = browser.new_context()
-    page = context.new_page()
+def open_bank_page(pw):
+    # A persistent profile directory behaves like a real, continuously-used
+    # Chrome profile (cookies, local storage, device fingerprint all stick
+    # around naturally) instead of a fresh throwaway browser each time.
+    context = pw.chromium.launch_persistent_context(
+        user_data_dir=str(PROFILE_DIR), headless=False,
+    )
+    page = context.pages[0] if context.pages else context.new_page()
     page.goto(BANK_URL, wait_until="domcontentloaded")
+    page.wait_for_timeout(1500)
+    return context, page
+
+
+def do_login(page, creds):
+    print("Not logged in yet -- logging in...")
     page.click("text=Sign in to Online Banking")
 
     try:
@@ -83,35 +93,11 @@ def interactive_login(pw, creds):
     while waited < 300:
         if is_logged_in(page):
             print("Login detected.")
-            break
+            return
         page.wait_for_timeout(1000)
         waited += 1
-    else:
-        print("Didn't detect a successful login after 5 minutes.")
-        input("Press Enter here once you're fully logged in... ")
-
-    context.storage_state(path=str(SESSION_FILE))
-    print("Session saved.")
-    return browser, context, page
-
-
-def get_authenticated_page(pw, creds):
-    if SESSION_FILE.exists():
-        # Headless gets blocked by the bank's bot protection (403), so stay
-        # visible even on session-reuse runs -- it's still fully automatic,
-        # just not invisible.
-        browser = pw.chromium.launch(headless=False)
-        context = browser.new_context(storage_state=str(SESSION_FILE))
-        page = context.new_page()
-        page.goto(BANK_URL, wait_until="domcontentloaded")
-        page.wait_for_timeout(1500)
-        if is_logged_in(page):
-            return browser, context, page
-        context.close()
-        browser.close()
-        print("Saved session expired.")
-
-    return interactive_login(pw, creds)
+    print("Didn't detect a successful login after 5 minutes.")
+    input("Press Enter here once you're fully logged in... ")
 
 
 def download_csv(page, bank_account_name):
@@ -151,8 +137,10 @@ def run():
     creds = load_creds()
     csv_text = None
     with sync_playwright() as pw:
-        browser, context, page = get_authenticated_page(pw, creds)
+        context, page = open_bank_page(pw)
         try:
+            if not is_logged_in(page):
+                do_login(page, creds)
             print("Downloading CSV export...")
             csv_text = download_csv(page, creds["bank_account_name"])
             print("Download captured.")
@@ -163,7 +151,6 @@ def run():
             print(f"Error: {e}")
         finally:
             context.close()
-            browser.close()
 
     if csv_text is None:
         return
