@@ -5,8 +5,12 @@ Run with: python server.py
 Listens on http://localhost:5112 (also reachable via Tailscale from other devices)
 """
 
+import csv
+import io
 import json
 import os
+import re
+import uuid
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -80,6 +84,76 @@ def get_state():
 def save_state():
     STATE_FILE.write_text(json.dumps(request.json))
     return jsonify({"ok": True})
+
+# ── Bank CSV scrape import ───────────────────────────────────────────────────
+
+def parse_bank_date(s):
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", (s or "").strip())
+    if not m:
+        return None
+    mo, d, y = m.groups()
+    return f"{y}-{mo.zfill(2)}-{d.zfill(2)}"
+
+def parse_bank_csv(text):
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        d = parse_bank_date(row.get("Date", ""))
+        if not d:
+            continue
+        try:
+            amount = float(re.sub(r"[^0-9.\-]", "", row.get("Amount", "")))
+        except ValueError:
+            continue  # non-transaction summary row, e.g. "Daily Ledger Bal"
+        bank_category = (row.get("Category") or "").strip()
+        memo = (row.get("Memo") or "").strip() or (f"(bank category: {bank_category})" if bank_category else "")
+        rows.append({
+            "date": d,
+            "description": (row.get("Description") or "(no description)").strip(),
+            "amount": amount,
+            "memo": memo,
+        })
+    return rows
+
+@app.route("/api/import_csv", methods=["POST"])
+def import_csv():
+    body = request.json
+    account_name = body.get("account_name")
+    csv_text = body.get("csv_text", "")
+
+    if not STATE_FILE.exists():
+        return jsonify({"error": "No budget data yet — open the app once first"}), 400
+    data = json.loads(STATE_FILE.read_text())
+
+    account = next((a for a in data["accounts"] if a["name"] == account_name), None)
+    if not account:
+        return jsonify({"error": f"No account named '{account_name}' in the budget"}), 400
+    account_id = account["id"]
+
+    rows = parse_bank_csv(csv_text)
+    existing_keys = {
+        f"{t['date']}|{t['description']}|{t['amount']}"
+        for t in data["transactions"] if t["accountId"] == account_id
+    }
+    added = 0
+    for r in rows:
+        key = f"{r['date']}|{r['description']}|{r['amount']}"
+        if key in existing_keys:
+            continue
+        data["transactions"].append({
+            "id": uuid.uuid4().hex[:8],
+            "date": r["date"],
+            "accountId": account_id,
+            "description": r["description"],
+            "amount": r["amount"],
+            "group": "Deposits" if r["amount"] > 0 else None,
+            "categoryId": None,
+            "memo": r["memo"],
+        })
+        existing_keys.add(key)
+        added += 1
+
+    STATE_FILE.write_text(json.dumps(data))
+    return jsonify({"ok": True, "added": added, "parsed": len(rows)})
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -214,9 +288,9 @@ def disconnect():
 
 if __name__ == "__main__":
     print()
-    print("  Simple Budget - Bank Sync Server")
-    print("  Running at http://localhost:5112")
+    print("  Simple Budget Server")
+    print("  Running at http://localhost:5112 (also reachable via Tailscale)")
     print("  Keep this window open while using the app.")
     print("  Ctrl+C to stop.")
     print()
-    app.run(port=5112, debug=False)
+    app.run(host="0.0.0.0", port=5112, debug=False)
