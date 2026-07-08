@@ -98,7 +98,12 @@ def get_authenticated_page(pw, creds):
     return interactive_login(pw, creds)
 
 
-def download_csv(page):
+def download_csv(page, bank_account_name):
+    # After login you land on the accounts overview, not a specific account's
+    # Activity page -- click into the right account first.
+    if page.locator("text=Download").count() == 0:
+        page.click(f"text={bank_account_name}")
+        page.wait_for_timeout(1500)
     page.click("text=Download")
     page.wait_for_timeout(1000)
     # "Spreadsheet CSV" is the default format per the bank's export menu.
@@ -131,7 +136,7 @@ def run():
         browser, context, page = get_authenticated_page(pw, creds)
         try:
             print("Downloading CSV export...")
-            csv_text = download_csv(page)
+            csv_text = download_csv(page, creds["bank_account_name"])
             print("Download captured.")
         except Exception as e:
             screenshot = ROOT / "bank_scraper_error.png"
