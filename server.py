@@ -114,6 +114,11 @@ def parse_bank_csv(text):
         })
     return rows
 
+def is_placeholder_description(desc):
+    # Pending transactions often show as a raw reference number before the
+    # real merchant name posts, e.g. "000000154126".
+    return bool(re.fullmatch(r"0*\d+", (desc or "").strip()))
+
 @app.route("/api/import_csv", methods=["POST"])
 def import_csv():
     body = request.json
@@ -130,16 +135,32 @@ def import_csv():
     account_id = account["id"]
 
     rows = parse_bank_csv(csv_text)
-    existing_keys = {
-        f"{t['date']}|{t['description']}|{t['amount']}"
-        for t in data["transactions"] if t["accountId"] == account_id
-    }
+    by_date = {}
+    for t in data["transactions"]:
+        if t["accountId"] == account_id:
+            by_date.setdefault(t["date"], []).append(t)
+
     added = 0
+    updated = 0
     for r in rows:
-        key = f"{r['date']}|{r['description']}|{r['amount']}"
-        if key in existing_keys:
+        same_day = by_date.get(r["date"], [])
+        # Exact match already present -- true duplicate, skip.
+        if any(t["description"] == r["description"] and t["amount"] == r["amount"] for t in same_day):
             continue
-        data["transactions"].append({
+        # Same transaction settling: pending placeholder -> real name, or
+        # same description with the amount finalized (e.g. a tip added).
+        candidate = next(
+            (t for t in same_day if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])),
+            None,
+        ) or next((t for t in same_day if t["description"] == r["description"] and t["amount"] != r["amount"]), None)
+        if candidate:
+            candidate["description"] = r["description"]
+            candidate["amount"] = r["amount"]
+            if r["memo"]:
+                candidate["memo"] = r["memo"]
+            updated += 1
+            continue
+        new_tx = {
             "id": uuid.uuid4().hex[:8],
             "date": r["date"],
             "accountId": account_id,
@@ -148,12 +169,14 @@ def import_csv():
             "group": "Deposits" if r["amount"] > 0 else None,
             "categoryId": None,
             "memo": r["memo"],
-        })
-        existing_keys.add(key)
+        }
+        data["transactions"].append(new_tx)
+        same_day.append(new_tx)
+        by_date[r["date"]] = same_day
         added += 1
 
     STATE_FILE.write_text(json.dumps(data))
-    return jsonify({"ok": True, "added": added, "parsed": len(rows)})
+    return jsonify({"ok": True, "added": added, "updated": updated, "parsed": len(rows)})
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
