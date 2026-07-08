@@ -138,7 +138,10 @@ def download_csv(page, bank_account_name):
     # multi-account run we're still sitting on that account's Activity page.
     page.click("nav >> text=Accounts")
     page.wait_for_timeout(800)
-    page.click(f"text={bank_account_name}")
+    # Scope to the open dropdown panel specifically -- a short name like
+    # "Savings" can match a hidden duplicate elsewhere on the page, which
+    # Playwright would otherwise try (and fail) to click.
+    page.locator("#accounts_tab-dropdown").get_by_text(bank_account_name, exact=True).first.click()
     page.wait_for_timeout(1500)
     page.click("text=Download")
     page.wait_for_timeout(1000)
