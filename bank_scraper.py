@@ -65,7 +65,9 @@ def interactive_login(pw, creds):
         page.click("text=Log In")
         print("Auto-filled login form.")
     except Exception as e:
-        print(f"Auto-fill didn't work ({e}).")
+        screenshot = ROOT / "bank_scraper_login_error.png"
+        page.screenshot(path=str(screenshot))
+        print(f"Auto-fill didn't work ({e}). Screenshot saved to {screenshot}")
         print("Please type your Access ID and Password into the browser window yourself.")
 
     print()
