@@ -156,10 +156,12 @@ def download_csv(page, bank_account_name):
 
     # Guessing at the Download dialog's close button kept failing (it's an
     # Angular ngb-modal-window that ignores Escape and blocks clicks
-    # underneath it). Reloading the page is more robust than chasing its
-    # exact close-button selector -- it always clears the modal, and the
-    # session persists through a reload since we're still logged in.
-    page.goto(BANK_URL, wait_until="domcontentloaded")
+    # underneath it). Reloading all the way to BANK_URL landed on the public
+    # marketing site (a different domain than the actual banking app),
+    # losing the authenticated view -- so instead click "Home" in the
+    # authenticated app's own nav bar, which clears the modal via normal
+    # SPA routing without ever leaving the banking session.
+    page.click("nav >> text=Home")
     page.wait_for_timeout(1000)
 
     return csv_text
