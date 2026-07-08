@@ -152,22 +152,17 @@ def download_csv(page, bank_account_name):
     download = dl_info.value
     path = ROOT / "last_bank_export.csv"
     download.save_as(str(path))
+    csv_text = path.read_text()
 
-    # Close the Download dialog -- confirmed via error logs it's an Angular
-    # <ngb-modal-window> that ignores a plain Escape keypress and otherwise
-    # blocks clicking into the next account ("intercepts pointer events").
-    modal = page.locator("ngb-modal-window")
-    for selector in ["[aria-label='Close']", "button.close", "button"]:
-        btn = modal.locator(selector).first
-        if btn.count():
-            try:
-                btn.click(timeout=2000)
-                break
-            except Exception:
-                continue
-    page.wait_for_selector("ngb-modal-window", state="detached", timeout=5000)
+    # Guessing at the Download dialog's close button kept failing (it's an
+    # Angular ngb-modal-window that ignores Escape and blocks clicks
+    # underneath it). Reloading the page is more robust than chasing its
+    # exact close-button selector -- it always clears the modal, and the
+    # session persists through a reload since we're still logged in.
+    page.goto(BANK_URL, wait_until="domcontentloaded")
+    page.wait_for_timeout(1000)
 
-    return path.read_text()
+    return csv_text
 
 
 def import_to_server(account_name, csv_text):
