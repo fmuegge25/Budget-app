@@ -132,7 +132,35 @@ def do_login(page, creds):
     input("Press Enter here once you're fully logged in... ")
 
 
+def close_stuck_modal(page):
+    # If a previous account's download errored out (e.g. expect_download
+    # timed out), the bank's Angular modal is often left open -- and it
+    # blocks all clicks outside itself, which silently breaks the *next*
+    # account's attempt to even open the Accounts dropdown. Confirmed root
+    # cause of FM Feeders / RG Exchange never actually being reached despite
+    # Checking succeeding: this modal sat open across account iterations.
+    # Defensively clear it before every account, not just after an error.
+    if page.locator("ngb-modal-window").count() == 0:
+        return
+    try:
+        page.locator(".icon-x-close-solid").first.click(timeout=2000)
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    page.wait_for_timeout(500)
+    if page.locator("ngb-modal-window").count() > 0:
+        # Still stuck -- reload is the reliable last resort; the persistent
+        # profile keeps us logged in, so this doesn't require re-auth.
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+
+
 def download_csv(page, bank_account_name):
+    close_stuck_modal(page)
+
     # Always go through the "Accounts" nav dropdown to reach the specific
     # account -- needed every time, since after finishing one account in a
     # multi-account run we're still sitting on that account's Activity page.
@@ -143,6 +171,23 @@ def download_csv(page, bank_account_name):
     # Playwright would otherwise try (and fail) to click.
     page.locator("#accounts_tab-dropdown").get_by_text(bank_account_name, exact=True).first.click()
     page.wait_for_timeout(1500)
+
+    # Verify the switch actually landed -- confirmed failure mode: the click
+    # above silently doesn't register (usually because a stuck modal from
+    # the previous account intercepted it) and the page is left showing
+    # whatever account we were already on. Downloading in that state
+    # silently re-imports the WRONG account's data instead of failing loudly.
+    # The account name isn't in a semantic <h1>/<h2> -- check for a
+    # *visible* match instead (a hidden duplicate can still sit in the
+    # closed Accounts dropdown's DOM, so count() alone isn't enough).
+    matches = page.get_by_text(bank_account_name, exact=True)
+    landed = any(matches.nth(i).is_visible() for i in range(matches.count()))
+    if not landed:
+        raise RuntimeError(
+            f"Account switch to '{bank_account_name}' didn't land -- "
+            f"still on a different account's page (possibly a stuck modal)."
+        )
+
     page.click("text=Download")
     page.wait_for_timeout(1000)
     # "Spreadsheet CSV" is the default format per the bank's export menu.
@@ -150,7 +195,7 @@ def download_csv(page, bank_account_name):
     if fmt.count():
         fmt.click()
         page.wait_for_timeout(500)
-    with page.expect_download(timeout=15000) as dl_info:
+    with page.expect_download(timeout=30000) as dl_info:
         page.locator("text=Download").last.click()
     download = dl_info.value
     path = ROOT / "last_bank_export.csv"
