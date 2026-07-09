@@ -1354,25 +1354,44 @@ function App() {
   const [monthKey, setMonthKey] = useState(todayMonthKey());
   const [serverReady, setServerReady] = useState(false);
 
-  // On mount, pull the shared server copy (source of truth across devices).
+  // On mount, pull the shared server copy (source of truth across devices) --
+  // but only if this device doesn't have local edits that never made it to
+  // the server yet (e.g. phone was used while the laptop/server was off).
+  // 'simplebudget1_synced' tracks the last state we know for sure the server
+  // has. If it's missing entirely (first run ever, or first run after this
+  // fix), there's nothing to protect, so behave like before and just load
+  // the server's copy. If it's present and doesn't match current local
+  // state, this device has unpushed changes -- keep them and let the push
+  // effect below retry sending them, instead of silently overwriting them.
   useEffect(() => {
+    const syncedRaw = localStorage.getItem('simplebudget1_synced');
+    const localIsDirty = syncedRaw !== null && syncedRaw !== JSON.stringify(state);
     fetch('/api/state')
       .then(r => r.json())
-      .then(serverState => { if (serverState) dispatch({ type: 'LOAD', state: serverState }); })
+      .then(serverState => {
+        if (!serverState || localIsDirty) return;
+        dispatch({ type: 'LOAD', state: serverState });
+        localStorage.setItem('simplebudget1_synced', JSON.stringify(serverState));
+      })
       .catch(() => {})
       .finally(() => setServerReady(true));
   }, []);
 
   // Cache locally always; push to the shared server once we know we're not
-  // about to clobber it with stale pre-load data.
+  // about to clobber it with stale pre-load data. On a confirmed successful
+  // push, record this exact state as the last-known-synced snapshot so a
+  // future mount can tell local edits apart from server data.
   useEffect(() => {
     localStorage.setItem('simplebudget1', JSON.stringify(state));
     if (!serverReady) return;
+    const body = JSON.stringify(state);
     fetch('/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state),
-    }).catch(() => {});
+      body,
+    })
+      .then(() => localStorage.setItem('simplebudget1_synced', body))
+      .catch(() => {});
   }, [state, serverReady]);
 
   return (
