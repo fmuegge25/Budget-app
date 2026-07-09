@@ -2,6 +2,9 @@ plaid_config.json
 budget_data.json
 budget_data.backup.json
 bank_credentials.json
+cfcu_credentials.json
 bank_session_state.json
 bank_browser_profile/
+cfcu_browser_profile/
 last_bank_export.csv
+__pycache__/

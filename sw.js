@@ -1,4 +1,4 @@
-const CACHE_NAME = 'simple-budget-shell-v1';
+const CACHE_NAME = 'simple-budget-shell-v3';
 const SHELL_FILES = ['/', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -19,16 +19,17 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET' || event.request.url.includes('/api/')) return;
+  // Network-first: always prefer the live server's latest version while
+  // online (this app is actively edited, so a stale cached copy has
+  // repeatedly caused confusion). Only fall back to the cache if the
+  // network is unreachable, e.g. offline on a phone away from the laptop.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          return res;
-        })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

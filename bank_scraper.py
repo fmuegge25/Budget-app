@@ -22,16 +22,17 @@ Run with: python bank_scraper.py
 import json
 import sys
 import traceback
-import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+
+from bank_sync_common import notify, import_to_server, reconcile
 
 ROOT = Path(__file__).parent
 CREDS_FILE = ROOT / "bank_credentials.json"
 PROFILE_DIR = ROOT / "bank_browser_profile"
 BANK_URL = "https://stateexchangebank.com/index.html"
-SERVER = "http://localhost:5112"
+
 
 def load_creds():
     if not CREDS_FILE.exists():
@@ -129,6 +130,11 @@ def do_login(page, creds):
         page.wait_for_timeout(1000)
         waited += 1
     print("Didn't detect a successful login after 5 minutes.")
+    notify(
+        "Simple Budget - Bank Sign-In Failed",
+        "Didn't detect a successful bank login after 5 minutes.\n"
+        "Check the browser window -- it may be stuck on a passcode/MFA step.",
+    )
     input("Press Enter here once you're fully logged in... ")
 
 
@@ -212,16 +218,6 @@ def download_csv(page, bank_account_name):
     return csv_text
 
 
-def import_to_server(account_name, csv_text):
-    body = json.dumps({"account_name": account_name, "csv_text": csv_text}).encode()
-    req = urllib.request.Request(
-        f"{SERVER}/api/import_csv", data=body,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode())
-
-
 def run():
     creds = load_creds()
     with sync_playwright() as pw:
@@ -240,6 +236,7 @@ def run():
                     print("Download captured. Sending to Simple Budget server...")
                     result = import_to_server(app_name, csv_text)
                     print(f"Imported {result['added']} new transactions ({result['parsed']} total in the export).")
+                    reconcile(app_name, csv_text)
                 except Exception as e:
                     screenshot = ROOT / f"bank_scraper_error_{bank_name.replace(' ', '_')}.png"
                     page.screenshot(path=str(screenshot))
@@ -253,8 +250,9 @@ def run():
 if __name__ == "__main__":
     try:
         run()
-    except Exception:
+    except Exception as e:
         print("\n--- Something went wrong ---")
         traceback.print_exc()
+        notify("Simple Budget - Bank Scraper Failed", f"The bank scraper crashed:\n{e}")
     finally:
         input("\nPress Enter to close this window... ")

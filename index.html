@@ -148,7 +148,7 @@ function sampleData() {
     { id: uid(), name: 'FM Feeders', startingBalance: 442.36 },
     { id: uid(), name: 'Credit Card', startingBalance: 0 },
   ];
-  return { accounts, categories, transactions: [], budgetMonths: {} };
+  return { accounts, categories, transactions: [], budgetMonths: {}, debts: [] };
 }
 
 // ---------- Reducer ----------
@@ -201,6 +201,8 @@ function reducer(state, action) {
       return { ...state, accounts: [...state.accounts, { id: uid(), name: action.name, startingBalance: action.startingBalance || 0 }] };
     case 'RENAME_ACCOUNT':
       return { ...state, accounts: state.accounts.map(a => a.id === action.id ? { ...a, name: action.name } : a) };
+    case 'SET_STARTING_BALANCE':
+      return { ...state, accounts: state.accounts.map(a => a.id === action.id ? { ...a, startingBalance: action.startingBalance } : a) };
     case 'DELETE_ACCOUNT':
       return { ...state, accounts: state.accounts.filter(a => a.id !== action.id), transactions: state.transactions.filter(t => t.accountId !== action.id) };
     case 'IMPORT_CSV': {
@@ -245,18 +247,48 @@ function reducer(state, action) {
       };
     }
     case 'LOAD':
-      return action.state;
+      return migrateDebts({ debts: [], ...action.state });
+    case 'ADD_DEBT': {
+      // Every debt gets a matching Debts-group category, atomically, so a
+      // payment transaction categorized to it can auto-reduce the balance.
+      const categoryId = uid();
+      return {
+        ...state,
+        categories: [...state.categories, { id: categoryId, group: 'Debts', name: action.name }],
+        debts: [...state.debts, { id: uid(), name: action.name, balance: action.balance, apr: action.apr, categoryId }],
+      };
+    }
+    case 'EDIT_DEBT':
+      return { ...state, debts: state.debts.map(d => d.id === action.id ? { ...d, ...action.patch } : d) };
+    case 'DELETE_DEBT':
+      return { ...state, debts: state.debts.filter(d => d.id !== action.id) };
     default:
       return state;
   }
 }
 
+// Backfills a Debts-group category link for any debt that doesn't have one
+// yet (older saved data, or a debt whose name matches a pre-existing
+// category) -- this is what lets a categorized payment transaction
+// auto-reduce that debt's balance.
+function migrateDebts(state) {
+  const debts = state.debts || [];
+  const categories = [...(state.categories || [])];
+  const migrated = debts.map(d => {
+    if (d.categoryId) return d;
+    let cat = categories.find(c => c.group === 'Debts' && c.name === d.name);
+    if (!cat) { cat = { id: uid(), group: 'Debts', name: d.name }; categories.push(cat); }
+    return { ...d, categoryId: cat.id };
+  });
+  return { ...state, categories, debts: migrated };
+}
+
 function loadInitial() {
   try {
     const raw = localStorage.getItem('simplebudget1');
-    if (raw) return JSON.parse(raw);
+    if (raw) return migrateDebts(JSON.parse(raw));
   } catch (e) {}
-  return sampleData();
+  return migrateDebts(sampleData());
 }
 
 // ---------- Budget math ----------
@@ -286,6 +318,20 @@ function accountBalance(state, accountId) {
   return acc.startingBalance + sum;
 }
 
+// Amount paid toward a debt so far = all transactions categorized to its
+// linked Debts category (spending transactions carry a negative amount).
+function debtPaidSoFar(state, categoryId) {
+  if (!categoryId) return 0;
+  return state.transactions.filter(t => t.categoryId === categoryId).reduce((s, t) => s - t.amount, 0);
+}
+
+// The balance you enter on a debt is the starting point; recording a
+// payment (a transaction categorized to that debt) automatically brings
+// this current balance down from there.
+function debtCurrentBalance(state, debt) {
+  return debt.balance - debtPaidSoFar(state, debt.categoryId);
+}
+
 function totalAssignedForMonth(state, monthKey) {
   const monthData = state.budgetMonths[monthKey] || {};
   return Object.values(monthData).reduce((s, v) => s + (v || 0), 0);
@@ -308,9 +354,14 @@ function countUncategorized(state) {
 const BudgetContext = createContext(null);
 
 // ---------- Components ----------
-function EditableMoney({ value, onCommit, className }) {
+function EditableMoney({ value, onCommit, className, editable }) {
   const [text, setText] = useState(value === 0 ? '' : String(value));
   useEffect(() => { setText(value === 0 ? '' : String(value)); }, [value]);
+
+  if (!editable) {
+    return <span className={`text-right ${className || 'w-24'}`}>{fmt(value)}</span>;
+  }
+
   return (
     <input
       type="text"
@@ -320,7 +371,7 @@ function EditableMoney({ value, onCommit, className }) {
         const n = parseFloat(text.replace(/[^0-9.\-]/g, ''));
         onCommit(isNaN(n) ? 0 : n);
       }}
-      className={`text-right bg-transparent border-b border-transparent focus:border-gray-400 outline-none ${className || 'w-24'}`}
+      className={`text-right bg-transparent border-b border-gray-400 outline-none ${className || 'w-24'}`}
       placeholder="0.00"
     />
   );
@@ -334,7 +385,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
   const [newAccBal, setNewAccBal] = useState('');
 
   return (
-    <div className="w-full md:w-64 md:shrink-0 bg-white border-b md:border-b-0 md:border-r md:h-screen md:overflow-y-auto flex flex-col">
+    <div className="w-full md:w-80 md:shrink-0 bg-white border-b md:border-b-0 md:border-r md:h-screen md:overflow-y-auto flex flex-col">
       <div className="p-4 border-b flex items-center justify-between">
         <div className="font-bold text-lg text-gray-800">Simple Budget</div>
         <div className="flex items-center gap-1 md:hidden">
@@ -386,6 +437,12 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
           All Accounts
         </button>
         <button
+          onClick={() => setView({ type: 'debts' })}
+          className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'debts' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
+        >
+          Debts
+        </button>
+        <button
           onClick={() => setView({ type: 'manage-categories' })}
           className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'manage-categories' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
         >
@@ -412,6 +469,16 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
                   if (name && name.trim()) dispatch({ type: 'RENAME_ACCOUNT', id: a.id, name: name.trim() });
                 }}
               >rename</button>
+              <button
+                className="text-gray-300 hover:text-blue-500 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const val = window.prompt('Starting balance', a.startingBalance);
+                  if (val === null) return;
+                  const num = parseFloat(val);
+                  if (!isNaN(num)) dispatch({ type: 'SET_STARTING_BALANCE', id: a.id, startingBalance: num });
+                }}
+              >balance</button>
               <button
                 className="text-gray-300 hover:text-red-500 text-xs"
                 onClick={(e) => {
@@ -447,7 +514,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
   );
 }
 
-function GroupCard({ group, monthKey }) {
+function GroupCard({ group, monthKey, editBudget }) {
   const { state, dispatch } = useContext(BudgetContext);
   const cats = state.categories.filter(c => c.group === group);
 
@@ -456,6 +523,10 @@ function GroupCard({ group, monthKey }) {
   return (
     <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
       <div className="px-4 py-2 bg-gray-800 text-white font-semibold">{group}</div>
+      <div className="flex items-center justify-end px-3 py-1 gap-2 text-xs uppercase tracking-wide text-gray-400 border-b">
+        <span className="w-16 shrink-0 text-right">Budgeted</span>
+        <span className="w-20 shrink-0 text-right">Amt Remaining</span>
+      </div>
       <div>
         {cats.map(c => {
           const row = computeCategoryHistory(state, c.id, monthKey);
@@ -470,6 +541,7 @@ function GroupCard({ group, monthKey }) {
                 value={row.assigned}
                 onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
                 className="w-16 shrink-0"
+                editable={editBudget}
               />
               <span className={`w-20 shrink-0 text-right font-medium ${moneyClass(row.remaining)}`}>{fmt(row.remaining)}</span>
             </div>
@@ -488,9 +560,20 @@ function GroupCard({ group, monthKey }) {
 }
 
 function BudgetView({ monthKey }) {
+  const [editBudget, setEditBudget] = useState(false);
   return (
-    <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-      {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} />)}
+    <div className="p-4 md:p-6 max-w-5xl">
+      <div className="flex justify-end mb-3">
+        <button
+          className={`px-3 py-1.5 rounded text-sm font-medium ${editBudget ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}
+          onClick={() => setEditBudget(v => !v)}
+        >
+          {editBudget ? 'Done Editing' : 'Edit Budgeted Amounts'}
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} editBudget={editBudget} />)}
+      </div>
     </div>
   );
 }
@@ -1070,6 +1153,142 @@ function AllAccountsView({ setView }) {
   );
 }
 
+function computePayoff(balance, aprPercent, payment) {
+  const r = (aprPercent / 100) / 12;
+  if (!payment || payment <= 0) return { neverPaysOff: true };
+  if (r > 0 && payment <= balance * r) return { neverPaysOff: true };
+  let bal = balance;
+  let totalInterest = 0;
+  let months = 0;
+  while (bal > 0 && months < 1200) {
+    const interest = bal * r;
+    totalInterest += interest;
+    bal += interest;
+    bal -= Math.min(payment, bal);
+    months++;
+  }
+  return { neverPaysOff: false, months, totalInterest };
+}
+
+function DebtCard({ debt }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const [payment, setPayment] = useState(debt.payment != null ? String(debt.payment) : '');
+  const paymentNum = parseFloat(payment);
+  const paidSoFar = debtPaidSoFar(state, debt.categoryId);
+  const currentBalance = debt.balance - paidSoFar;
+  const result = useMemo(() => computePayoff(currentBalance, debt.apr, paymentNum), [currentBalance, debt.apr, paymentNum]);
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+      <div className="px-4 py-2 bg-gray-800 text-white font-semibold flex items-center justify-between">
+        <span className="truncate">{debt.name}</span>
+        <span className="flex items-center gap-2 shrink-0 text-xs">
+          <button
+            className="text-gray-300 hover:text-white"
+            onClick={() => {
+              const name = window.prompt('Debt name', debt.name);
+              if (!name || !name.trim()) return;
+              const balStr = window.prompt('Starting balance (before any recorded payments)', debt.balance);
+              if (balStr === null) return;
+              const aprStr = window.prompt('Interest rate (APR %)', debt.apr);
+              if (aprStr === null) return;
+              const balance = parseFloat(balStr); const apr = parseFloat(aprStr);
+              dispatch({ type: 'EDIT_DEBT', id: debt.id, patch: { name: name.trim(), balance: isNaN(balance) ? debt.balance : balance, apr: isNaN(apr) ? debt.apr : apr } });
+            }}
+          >edit</button>
+          <button
+            className="text-gray-300 hover:text-red-400"
+            onClick={() => { if (window.confirm(`Delete "${debt.name}"?`)) dispatch({ type: 'DELETE_DEBT', id: debt.id }); }}
+          >✕</button>
+        </span>
+      </div>
+      <div className="p-4 text-sm space-y-3">
+        <div className="flex justify-between">
+          <span className="text-gray-500">Balance owed</span>
+          <span className="font-semibold">{fmt(currentBalance)}</span>
+        </div>
+        {paidSoFar !== 0 && (
+          <div className="flex justify-between text-xs text-green-600">
+            <span>Paid so far</span>
+            <span>{fmt(paidSoFar)}</span>
+          </div>
+        )}
+        <div className="flex justify-between">
+          <span className="text-gray-500">Interest rate (APR)</span>
+          <span className="font-semibold">{debt.apr}%</span>
+        </div>
+        <div className="pt-2 border-t">
+          <label className="text-gray-500 text-xs block mb-1">Monthly payment</label>
+          <input
+            type="text"
+            className="w-full border rounded px-2 py-1"
+            placeholder="e.g. 300"
+            value={payment}
+            onChange={e => {
+              const val = e.target.value;
+              setPayment(val);
+              const n = parseFloat(val);
+              dispatch({ type: 'EDIT_DEBT', id: debt.id, patch: { payment: isNaN(n) ? '' : n } });
+            }}
+          />
+        </div>
+        {payment !== '' && !isNaN(paymentNum) && (
+          result.neverPaysOff ? (
+            <div className="text-red-600 text-sm">That payment will never pay off this balance at {debt.apr}% APR — try a higher amount.</div>
+          ) : (
+            <div className="bg-gray-50 rounded px-3 py-2 text-sm space-y-1">
+              <div className="flex justify-between"><span className="text-gray-500">Paid off in</span><span className="font-semibold">{result.months} months ({Math.floor(result.months / 12)}y {result.months % 12}m)</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total interest paid</span><span className="font-semibold text-red-600">{fmt(result.totalInterest)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total paid</span><span className="font-semibold">{fmt(currentBalance + result.totalInterest)}</span></div>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DebtsView() {
+  const { state, dispatch } = useContext(BudgetContext);
+  const [name, setName] = useState('');
+  const [balance, setBalance] = useState('');
+  const [apr, setApr] = useState('');
+  const total = state.debts.reduce((s, d) => s + debtCurrentBalance(state, d), 0);
+
+  return (
+    <div className="p-4 md:p-6 max-w-5xl">
+      <h2 className="text-xl font-semibold mb-1">Debts</h2>
+      <div className="text-sm text-gray-500 mb-4">Total owed: <span className="font-semibold text-red-600">{fmt(total)}</span></div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {state.debts.map(d => <DebtCard key={d.id} debt={d} />)}
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border p-4 max-w-md">
+        <div className="font-medium mb-2 text-sm">Add a debt</div>
+        <div className="space-y-2">
+          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Name (e.g. Auto Loan)"
+            value={name} onChange={e => setName(e.target.value)} />
+          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Balance owed"
+            value={balance} onChange={e => setBalance(e.target.value)} />
+          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Interest rate (APR %)"
+            value={apr} onChange={e => setApr(e.target.value)} />
+          <button
+            className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm"
+            onClick={() => {
+              if (!name.trim()) return;
+              const bal = parseFloat(balance) || 0;
+              const rate = parseFloat(apr) || 0;
+              dispatch({ type: 'ADD_DEBT', name: name.trim(), balance: bal, apr: rate });
+              setName(''); setBalance(''); setApr('');
+            }}
+          >Add Debt</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReportsView({ monthKey }) {
   const { state } = useContext(BudgetContext);
 
@@ -1164,6 +1383,7 @@ function App() {
           {view.type === 'budget' && <BudgetView monthKey={monthKey} />}
           {view.type === 'register' && <RegisterView accountId={view.accountId} />}
           {view.type === 'all-accounts' && <AllAccountsView setView={setView} />}
+          {view.type === 'debts' && <DebtsView />}
           {view.type === 'reports' && <ReportsView monthKey={monthKey} />}
           {view.type === 'categorize' && <CategorizeView />}
           {view.type === 'manage-categories' && <ManageCategoriesView />}
