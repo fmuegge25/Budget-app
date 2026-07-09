@@ -26,7 +26,14 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from bank_sync_common import notify, import_to_server, reconcile
+from bank_sync_common import notify, import_to_server, reconcile, ensure_server_running
+
+# Passed by the daily Task Scheduler job (not by "Run Bank Scraper.bat", which
+# stays interactive for manual double-click use). Nobody is present to press
+# a key or complete a login step during an unattended run, so both blocking
+# input() prompts below get skipped in that mode -- the run just finishes or
+# aborts on its own instead of hanging forever.
+UNATTENDED = "--unattended" in sys.argv
 
 ROOT = Path(__file__).parent
 CREDS_FILE = ROOT / "bank_credentials.json"
@@ -135,6 +142,8 @@ def do_login(page, creds):
         "Didn't detect a successful bank login after 5 minutes.\n"
         "Check the browser window -- it may be stuck on a passcode/MFA step.",
     )
+    if UNATTENDED:
+        raise RuntimeError("Login not detected within 5 minutes (unattended run, no one to complete MFA)")
     input("Press Enter here once you're fully logged in... ")
 
 
@@ -220,6 +229,7 @@ def download_csv(page, bank_account_name):
 
 def run():
     creds = load_creds()
+    ensure_server_running()
     with sync_playwright() as pw:
         context, page = open_bank_page(pw)
         try:
@@ -255,4 +265,5 @@ if __name__ == "__main__":
         traceback.print_exc()
         notify("Simple Budget - Bank Scraper Failed", f"The bank scraper crashed:\n{e}")
     finally:
-        input("\nPress Enter to close this window... ")
+        if not UNATTENDED:
+            input("\nPress Enter to close this window... ")

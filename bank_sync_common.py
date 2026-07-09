@@ -10,12 +10,42 @@ import ctypes
 import io
 import json
 import re
+import socket
+import subprocess
+import time
 import urllib.request
+from pathlib import Path
 
 SERVER = "http://localhost:5112"
+SERVER_PORT = 5112
+ROOT = Path(__file__).parent
+PYTHONW = ROOT.parent / "py314" / "pythonw.exe"
 
 MB_ICONWARNING = 0x30
 MB_TOPMOST = 0x40000
+
+
+def ensure_server_running():
+    """Start server.py if it isn't already listening. Scheduled/unattended
+    scrapers can't rely on a separate at-logon task having already started
+    it -- that trigger has been unreliable (doesn't fire on sleep/wake, only
+    a real logon event) -- so each scraper brings the server up itself,
+    same as the desktop launcher does."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        if s.connect_ex(("127.0.0.1", SERVER_PORT)) == 0:
+            return  # already running
+    subprocess.Popen(
+        [str(PYTHONW), str(ROOT / "server.py")],
+        cwd=str(ROOT),
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    for _ in range(30):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            if s.connect_ex(("127.0.0.1", SERVER_PORT)) == 0:
+                return
+        time.sleep(0.3)
 
 
 def notify(title, message):
