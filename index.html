@@ -487,16 +487,16 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
         </button>
       </div>
 
-      <div className="hidden md:block px-4 py-2 text-xs uppercase tracking-wide text-gray-400 mt-2">Accounts</div>
+      <div className="hidden md:block px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 mt-1">Accounts</div>
       <div className="hidden md:block flex-1 overflow-y-auto">
         {state.accounts.map(a => (
           <div
             key={a.id}
             onClick={() => setView({ type: 'register', accountId: a.id })}
-            className={`w-full text-left px-4 py-2 flex justify-between items-center cursor-pointer group ${view.type === 'register' && view.accountId === a.id ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+            className={`w-full text-left px-4 py-1.5 flex justify-between items-center cursor-pointer group text-sm ${view.type === 'register' && view.accountId === a.id ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
           >
             <span className="truncate flex-1">{a.name}</span>
-            <span className={`text-sm mr-2 ${moneyClass(accountBalance(state, a.id))}`}>{fmt(accountBalance(state, a.id))}</span>
+            <span className={`text-sm mr-2 tabular-nums ${moneyClass(accountBalance(state, a.id))}`}>{fmt(accountBalance(state, a.id))}</span>
             <span className="opacity-0 group-hover:opacity-100 shrink-0 flex gap-1">
               <button
                 className="text-gray-300 hover:text-blue-500 text-xs"
@@ -634,10 +634,10 @@ function ManageCategoriesGroup({ group }) {
 
   return (
     <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-      <div className="px-4 py-2 bg-gray-800 text-white font-semibold">{group}</div>
-      {cats.map(c => (
-        <div key={c.id} className="flex items-center justify-between px-3 py-2 border-b last:border-0 text-sm gap-2">
-          <span className="truncate flex-1">{c.name}</span>
+      <div className="px-3 py-1.5 bg-gray-800 text-white font-semibold text-sm tracking-wide">{group}</div>
+      {cats.map((c, i) => (
+        <div key={c.id} className={`flex items-center justify-between px-3 py-1.5 border-b last:border-0 text-[13px] gap-2 ${i % 2 === 1 ? 'bg-gray-100/70' : ''} hover:bg-blue-50/60 transition-colors`}>
+          <span className="truncate flex-1 font-semibold text-gray-800">{c.name}</span>
           <span className="flex items-center gap-2 shrink-0">
             <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
             <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
@@ -683,8 +683,8 @@ function ManageCategoriesGroup({ group }) {
 
 function ManageCategoriesView() {
   return (
-    <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-      <h2 className="text-xl font-semibold col-span-full mb-0">Manage Categories</h2>
+    <div className="p-3 md:p-4 grid grid-cols-1 md:grid-cols-2 gap-3 max-w-5xl">
+      <h2 className="text-lg font-semibold text-gray-800 col-span-full mb-0">Manage Categories</h2>
       {GROUPS.map(g => <ManageCategoriesGroup key={g} group={g} />)}
     </div>
   );
@@ -983,28 +983,28 @@ function RegisterView({ accountId }) {
   }
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-semibold mb-1">{account ? account.name : 'Account'}</h2>
-      <div className={`mb-4 text-lg ${moneyClass(accountBalance(state, accountId))}`}>{fmt(accountBalance(state, accountId))}</div>
+    <div className="p-3 md:p-4">
+      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">{account ? account.name : 'Account'}</h2>
+      <div className={`mb-2.5 text-base font-semibold tabular-nums ${moneyClass(accountBalance(state, accountId))}`}>{fmt(accountBalance(state, accountId))}</div>
       <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
         {account && <BankSyncBar account={account} />}
         <CsvImportButton accountId={accountId} />
-        <table className="w-full text-sm">
+        <table className="w-full text-[13px]">
           <thead>
-            <tr className="text-gray-500 text-xs border-b bg-gray-50">
-              <th className="text-left px-2 py-2 font-normal">Date</th>
-              <th className="text-left px-2 py-2 font-normal">Description</th>
-              <th className="text-right px-2 py-2 font-normal">Amount</th>
-              <th className="text-left px-2 py-2 font-normal">Group</th>
-              <th className="text-left px-2 py-2 font-normal">Category</th>
-              <th className="text-left px-2 py-2 font-normal">Memo</th>
-              <th className="text-right px-2 py-2 font-normal">Balance</th>
-              <th className="px-2 py-2"></th>
+            <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
+              <th className="text-left px-2 py-1.5 font-semibold">Date</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Description</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Group</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Category</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Memo</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Balance</th>
+              <th className="px-2 py-1.5"></th>
             </tr>
           </thead>
           <tbody>
             <TxEditorRow key="new" accountId={accountId} initial={{}} onSubmit={handleAdd} submitLabel="Add" />
-            {rows.slice().reverse().map(t => (
+            {rows.slice().reverse().map((t, i) => (
               editingId === t.id ? (
                 <TxEditorRow
                   key={t.id}
@@ -1015,15 +1015,15 @@ function RegisterView({ accountId }) {
                   submitLabel="Save"
                 />
               ) : (
-                <tr key={t.id} className={`border-b last:border-0 hover:bg-gray-50 group ${!t.group ? 'bg-orange-50' : ''}`}>
-                  <td className="px-2 py-1.5 whitespace-nowrap">{t.date}</td>
-                  <td className="px-2 py-1.5">{t.description}</td>
-                  <td className={`px-2 py-1.5 text-right ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-                  <td className="px-2 py-1.5">{t.group || '—'}</td>
-                  <td className={`px-2 py-1.5 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
-                  <td className="px-2 py-1.5 text-gray-500">{t.memo}</td>
-                  <td className={`px-2 py-1.5 text-right ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
-                  <td className="px-2 py-1.5 whitespace-nowrap">
+                <tr key={t.id} className={`border-b last:border-0 hover:bg-blue-50/60 transition-colors group ${!t.group ? 'bg-orange-50' : i % 2 === 1 ? 'bg-gray-100/70' : ''}`}>
+                  <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
+                  <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+                  <td className="px-2 py-1">{t.group || '—'}</td>
+                  <td className={`px-2 py-1 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+                  <td className="px-2 py-1 text-gray-500">{t.memo}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">
                     {t.group !== 'Transfer' && (
                       <button
                         className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-blue-500 text-xs mr-2"
@@ -1082,12 +1082,12 @@ function CategorizeRow({ t }) {
 
   return (
     <tr className="border-b last:border-0 bg-orange-50">
-      <td className="px-2 py-1.5 whitespace-nowrap">{t.date}</td>
-      <td className="px-2 py-1.5">{accName}</td>
-      <td className="px-2 py-1.5">{t.description}</td>
-      <td className={`px-2 py-1.5 text-right ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-      <td className="px-2 py-1.5 text-gray-500">{t.memo}</td>
-      <td className="px-2 py-1.5"><GroupCategoryPicker t={t} /></td>
+      <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
+      <td className="px-2 py-1">{accName}</td>
+      <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
+      <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+      <td className="px-2 py-1 text-gray-500">{t.memo}</td>
+      <td className="px-2 py-1"><GroupCategoryPicker t={t} /></td>
     </tr>
   );
 }
@@ -1097,13 +1097,13 @@ function CategorizeCard({ t }) {
   const accName = (state.accounts.find(a => a.id === t.accountId) || {}).name || '—';
 
   return (
-    <div className="bg-orange-50 border rounded-lg p-3 mb-3">
+    <div className="bg-orange-50 border rounded-lg p-2.5 mb-2">
       <div className="flex justify-between items-start mb-1">
         <div>
-          <div className="font-medium">{t.description}</div>
-          <div className="text-xs text-gray-500">{t.date} · {accName}{t.memo ? ` · ${t.memo}` : ''}</div>
+          <div className="font-semibold text-gray-800 text-[13px]">{t.description}</div>
+          <div className="text-[11px] text-gray-500">{t.date} · {accName}{t.memo ? ` · ${t.memo}` : ''}</div>
         </div>
-        <div className={`font-semibold ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
+        <div className={`font-semibold tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
       </div>
       <div className="flex gap-2 mt-2">
         <GroupCategoryPicker t={t} />
@@ -1117,9 +1117,9 @@ function CategorizeView() {
   const rows = state.transactions.filter(needsCategorizing).sort((a, b) => b.date.localeCompare(a.date));
 
   return (
-    <div className="p-4 md:p-6">
-      <h2 className="text-xl font-semibold mb-1">Needs Categorizing</h2>
-      <p className="text-sm text-gray-500 mb-4">Pick a Group and Category for each — it saves immediately, no extra click.</p>
+    <div className="p-3 md:p-4">
+      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
+      <p className="text-xs text-gray-500 mb-2.5">Pick a Group and Category for each — it saves immediately, no extra click.</p>
       {rows.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">All caught up — nothing left to categorize.</div>
       ) : (
@@ -1128,15 +1128,15 @@ function CategorizeView() {
             {rows.map(t => <CategorizeCard key={t.id} t={t} />)}
           </div>
           <div className="hidden sm:block bg-white rounded-lg shadow-sm border overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-[13px]">
             <thead>
-              <tr className="text-gray-500 text-xs border-b bg-gray-50">
-                <th className="text-left px-2 py-2 font-normal">Date</th>
-                <th className="text-left px-2 py-2 font-normal">Account</th>
-                <th className="text-left px-2 py-2 font-normal">Description</th>
-                <th className="text-right px-2 py-2 font-normal">Amount</th>
-                <th className="text-left px-2 py-2 font-normal">Memo</th>
-                <th className="text-left px-2 py-2 font-normal">Group / Category</th>
+              <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
+                <th className="text-left px-2 py-1.5 font-semibold">Date</th>
+                <th className="text-left px-2 py-1.5 font-semibold">Account</th>
+                <th className="text-left px-2 py-1.5 font-semibold">Description</th>
+                <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
+                <th className="text-left px-2 py-1.5 font-semibold">Memo</th>
+                <th className="text-left px-2 py-1.5 font-semibold">Group / Category</th>
               </tr>
             </thead>
             <tbody>
@@ -1163,33 +1163,33 @@ function AllAccountsView({ setView }) {
   const rows = state.transactions.slice().sort((a, b) => b.date.localeCompare(a.date));
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-semibold mb-4">All Accounts</h2>
+    <div className="p-3 md:p-4">
+      <h2 className="text-lg font-semibold text-gray-800 mb-2.5">All Accounts</h2>
       <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-[13px]">
           <thead>
-            <tr className="text-gray-500 text-xs border-b bg-gray-50">
-              <th className="text-left px-2 py-2 font-normal">Date</th>
-              <th className="text-left px-2 py-2 font-normal">Account</th>
-              <th className="text-left px-2 py-2 font-normal">Description</th>
-              <th className="text-right px-2 py-2 font-normal">Amount</th>
-              <th className="text-left px-2 py-2 font-normal">Group</th>
-              <th className="text-left px-2 py-2 font-normal">Category</th>
+            <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
+              <th className="text-left px-2 py-1.5 font-semibold">Date</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Account</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Description</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Group</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Category</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(t => (
+            {rows.map((t, i) => (
               <tr
                 key={t.id}
-                className={`border-b last:border-0 hover:bg-gray-50 cursor-pointer ${!t.group ? 'bg-orange-50' : ''}`}
+                className={`border-b last:border-0 hover:bg-blue-50/60 transition-colors cursor-pointer ${!t.group ? 'bg-orange-50' : i % 2 === 1 ? 'bg-gray-100/70' : ''}`}
                 onClick={() => setView({ type: 'register', accountId: t.accountId })}
               >
-                <td className="px-2 py-1.5 whitespace-nowrap">{t.date}</td>
-                <td className="px-2 py-1.5">{accName(t.accountId)}</td>
-                <td className="px-2 py-1.5">{t.description}</td>
-                <td className={`px-2 py-1.5 text-right ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-                <td className="px-2 py-1.5">{t.group || '—'}</td>
-                <td className={`px-2 py-1.5 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
+                <td className="px-2 py-1">{accName(t.accountId)}</td>
+                <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
+                <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+                <td className="px-2 py-1">{t.group || '—'}</td>
+                <td className={`px-2 py-1 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
               </tr>
             ))}
             {rows.length === 0 && (
@@ -1229,7 +1229,7 @@ function DebtCard({ debt }) {
 
   return (
     <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-      <div className="px-4 py-2 bg-gray-800 text-white font-semibold flex items-center justify-between">
+      <div className="px-3 py-1.5 bg-gray-800 text-white font-semibold text-sm tracking-wide flex items-center justify-between">
         <span className="truncate">{debt.name}</span>
         <span className="flex items-center gap-2 shrink-0 text-xs">
           <button
@@ -1251,26 +1251,26 @@ function DebtCard({ debt }) {
           >✕</button>
         </span>
       </div>
-      <div className="p-4 text-sm space-y-3">
+      <div className="p-2.5 text-[13px] space-y-1.5">
         <div className="flex justify-between">
           <span className="text-gray-500">Balance owed</span>
-          <span className="font-semibold">{fmt(currentBalance)}</span>
+          <span className="font-semibold tabular-nums">{fmt(currentBalance)}</span>
         </div>
         {paidSoFar !== 0 && (
-          <div className="flex justify-between text-xs text-green-600">
+          <div className="flex justify-between text-[11px] text-green-600">
             <span>Paid so far</span>
-            <span>{fmt(paidSoFar)}</span>
+            <span className="tabular-nums">{fmt(paidSoFar)}</span>
           </div>
         )}
         <div className="flex justify-between">
           <span className="text-gray-500">Interest rate (APR)</span>
-          <span className="font-semibold">{debt.apr}%</span>
+          <span className="font-semibold tabular-nums">{debt.apr}%</span>
         </div>
-        <div className="pt-2 border-t">
-          <label className="text-gray-500 text-xs block mb-1">Monthly payment</label>
+        <div className="pt-1.5 border-t">
+          <label className="text-gray-500 text-[11px] block mb-0.5">Monthly payment</label>
           <input
             type="text"
-            className="w-full border rounded px-2 py-1"
+            className="w-full border rounded px-2 py-1 text-[13px] tabular-nums"
             placeholder="e.g. 300"
             value={payment}
             onChange={e => {
@@ -1283,12 +1283,12 @@ function DebtCard({ debt }) {
         </div>
         {payment !== '' && !isNaN(paymentNum) && (
           result.neverPaysOff ? (
-            <div className="text-red-600 text-sm">That payment will never pay off this balance at {debt.apr}% APR — try a higher amount.</div>
+            <div className="text-red-600 text-[13px]">That payment will never pay off this balance at {debt.apr}% APR — try a higher amount.</div>
           ) : (
-            <div className="bg-gray-50 rounded px-3 py-2 text-sm space-y-1">
-              <div className="flex justify-between"><span className="text-gray-500">Paid off in</span><span className="font-semibold">{result.months} months ({Math.floor(result.months / 12)}y {result.months % 12}m)</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total interest paid</span><span className="font-semibold text-red-600">{fmt(result.totalInterest)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total paid</span><span className="font-semibold">{fmt(currentBalance + result.totalInterest)}</span></div>
+            <div className="bg-gray-50 rounded px-2.5 py-1.5 text-[13px] space-y-1">
+              <div className="flex justify-between"><span className="text-gray-500">Paid off in</span><span className="font-semibold tabular-nums">{result.months} months ({Math.floor(result.months / 12)}y {result.months % 12}m)</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total interest paid</span><span className="font-semibold text-red-600 tabular-nums">{fmt(result.totalInterest)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total paid</span><span className="font-semibold tabular-nums">{fmt(currentBalance + result.totalInterest)}</span></div>
             </div>
           )
         )}
@@ -1305,25 +1305,25 @@ function DebtsView() {
   const total = state.debts.reduce((s, d) => s + debtCurrentBalance(state, d), 0);
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl">
-      <h2 className="text-xl font-semibold mb-1">Debts</h2>
-      <div className="text-sm text-gray-500 mb-4">Total owed: <span className="font-semibold text-red-600">{fmt(total)}</span></div>
+    <div className="p-3 md:p-4 max-w-5xl">
+      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Debts</h2>
+      <div className="text-xs text-gray-500 mb-2.5">Total owed: <span className="font-semibold text-red-600 tabular-nums">{fmt(total)}</span></div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
         {state.debts.map(d => <DebtCard key={d.id} debt={d} />)}
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border p-4 max-w-md">
-        <div className="font-medium mb-2 text-sm">Add a debt</div>
-        <div className="space-y-2">
-          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Name (e.g. Auto Loan)"
+      <div className="bg-white rounded-lg shadow-sm border p-3 max-w-md">
+        <div className="font-semibold mb-1.5 text-[13px] text-gray-800">Add a debt</div>
+        <div className="space-y-1.5">
+          <input className="w-full border rounded px-2 py-1 text-[13px]" placeholder="Name (e.g. Auto Loan)"
             value={name} onChange={e => setName(e.target.value)} />
-          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Balance owed"
+          <input className="w-full border rounded px-2 py-1 text-[13px]" placeholder="Balance owed"
             value={balance} onChange={e => setBalance(e.target.value)} />
-          <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Interest rate (APR %)"
+          <input className="w-full border rounded px-2 py-1 text-[13px]" placeholder="Interest rate (APR %)"
             value={apr} onChange={e => setApr(e.target.value)} />
           <button
-            className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm"
+            className="px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-medium"
             onClick={() => {
               if (!name.trim()) return;
               const bal = parseFloat(balance) || 0;
@@ -1361,34 +1361,34 @@ function ReportsView({ monthKey }) {
   const maxAmt = catRows.length ? catRows[0].amt : 0;
 
   return (
-    <div className="p-6 max-w-3xl">
-      <h2 className="text-xl font-semibold mb-4">Reports — {monthLabel(monthKey)}</h2>
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="text-xs text-gray-500">Income</div>
-          <div className="text-lg font-semibold text-emerald-700">{fmt(income)}</div>
+    <div className="p-3 md:p-4 max-w-3xl">
+      <h2 className="text-lg font-semibold text-gray-800 mb-2.5">Reports — {monthLabel(monthKey)}</h2>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="bg-white rounded-lg shadow-sm border p-2.5">
+          <div className="text-[11px] text-gray-500">Income</div>
+          <div className="text-base font-semibold text-emerald-700 tabular-nums">{fmt(income)}</div>
         </div>
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="text-xs text-gray-500">Expenses</div>
-          <div className="text-lg font-semibold text-red-600">{fmt(-expense)}</div>
+        <div className="bg-white rounded-lg shadow-sm border p-2.5">
+          <div className="text-[11px] text-gray-500">Expenses</div>
+          <div className="text-base font-semibold text-red-600 tabular-nums">{fmt(-expense)}</div>
         </div>
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="text-xs text-gray-500">Net</div>
-          <div className={`text-lg font-semibold ${moneyClass(net)}`}>{fmt(net)}</div>
+        <div className="bg-white rounded-lg shadow-sm border p-2.5">
+          <div className="text-[11px] text-gray-500">Net</div>
+          <div className={`text-base font-semibold tabular-nums ${moneyClass(net)}`}>{fmt(net)}</div>
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border p-4">
-        <div className="font-medium mb-3">Spending by Category</div>
-        {catRows.length === 0 && <div className="text-gray-400 text-sm">No spending recorded this month</div>}
+      <div className="bg-white rounded-lg shadow-sm border p-3">
+        <div className="font-semibold text-gray-800 text-[13px] mb-2">Spending by Category</div>
+        {catRows.length === 0 && <div className="text-gray-400 text-[13px]">No spending recorded this month</div>}
         {catRows.map(r => (
-          <div key={r.name} className="mb-2">
-            <div className="flex justify-between text-sm mb-0.5">
-              <span>{r.name} <span className="text-gray-400">({r.group})</span></span>
-              <span className="font-medium">{fmt(r.amt)}</span>
+          <div key={r.name} className="mb-1.5">
+            <div className="flex justify-between text-[13px] mb-0.5">
+              <span className="font-medium text-gray-800">{r.name} <span className="text-gray-400 font-normal">({r.group})</span></span>
+              <span className="font-medium tabular-nums">{fmt(r.amt)}</span>
             </div>
-            <div className="h-2 bg-gray-100 rounded">
-              <div className="h-2 bg-blue-500 rounded" style={{ width: `${maxAmt ? (r.amt / maxAmt) * 100 : 0}%` }}></div>
+            <div className="h-1.5 bg-gray-100 rounded">
+              <div className="h-1.5 bg-blue-500 rounded" style={{ width: `${maxAmt ? (r.amt / maxAmt) * 100 : 0}%` }}></div>
             </div>
           </div>
         ))}
