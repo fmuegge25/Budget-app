@@ -369,7 +369,7 @@ function readyToAssign(state, monthKey) {
 }
 
 function needsCategorizing(t) {
-  return !t.group || (GROUPS.includes(t.group) && !t.categoryId);
+  return !t.group || ((GROUPS.includes(t.group) || t.group === 'Deposits') && !t.categoryId);
 }
 
 function countUncategorized(state) {
@@ -686,6 +686,7 @@ function ManageCategoriesView() {
     <div className="p-3 md:p-4 grid grid-cols-1 md:grid-cols-2 gap-3 max-w-5xl">
       <h2 className="text-lg font-semibold text-gray-800 col-span-full mb-0">Manage Categories</h2>
       {GROUPS.map(g => <ManageCategoriesGroup key={g} group={g} />)}
+      <ManageCategoriesGroup group="Deposits" />
     </div>
   );
 }
@@ -718,7 +719,7 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
         description: desc.trim() || (group === 'Deposits' ? 'Deposit' : 'Expense'),
         amount: signedAmount,
         group,
-        categoryId: group === 'Deposits' ? null : (categoryId || null),
+        categoryId: categoryId || null,
         memo,
       });
     }
@@ -744,12 +745,12 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
             <option value="">— to account —</option>
             {otherAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
-        ) : group !== 'Deposits' ? (
+        ) : (
           <select value={categoryId} onChange={e => setCategoryId(e.target.value)} className="border rounded px-1 py-0.5 text-sm">
             <option value="">— category —</option>
             {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-        ) : <span className="text-gray-400 text-sm">—</span>}
+        )}
       </td>
       <td className="px-2 py-1"><input value={memo} onChange={e => setMemo(e.target.value)} placeholder="Memo" className="border rounded px-1 py-0.5 text-sm w-full" /></td>
       <td className="px-2 py-1"></td>
@@ -1045,9 +1046,13 @@ function RegisterView({ accountId }) {
   );
 }
 
+const CATEGORIZABLE_GROUPS = [...GROUPS, 'Deposits'];
+
 function GroupCategoryPicker({ t }) {
   const { state, dispatch } = useContext(BudgetContext);
-  const [group, setGroup] = useState(GROUPS.includes(t.group) ? t.group : 'Needs');
+  const [group, setGroup] = useState(
+    CATEGORIZABLE_GROUPS.includes(t.group) ? t.group : (t.amount > 0 ? 'Deposits' : 'Needs')
+  );
   const [categoryId, setCategoryId] = useState(t.categoryId || '');
   const catOptions = state.categories.filter(c => c.group === group);
 
@@ -1062,7 +1067,7 @@ function GroupCategoryPicker({ t }) {
         onChange={e => { setGroup(e.target.value); setCategoryId(''); commit(e.target.value, ''); }}
         className="border rounded px-2 py-1.5 text-sm bg-white"
       >
-        {GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+        {CATEGORIZABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
       </select>
       <select
         value={categoryId}
@@ -1360,6 +1365,20 @@ function ReportsView({ monthKey }) {
     .sort((a, b) => b.amt - a.amt);
   const maxAmt = catRows.length ? catRows[0].amt : 0;
 
+  const incomeTxs = monthTxs.filter(t => t.group === 'Deposits');
+  const byIncomeSource = {};
+  for (const t of incomeTxs) {
+    const key = t.categoryId || 'uncategorized';
+    byIncomeSource[key] = (byIncomeSource[key] || 0) + t.amount;
+  }
+  const incomeRows = Object.entries(byIncomeSource)
+    .map(([catId, amt]) => {
+      const c = state.categories.find(c => c.id === catId);
+      return { name: c ? c.name : 'Uncategorized', amt };
+    })
+    .sort((a, b) => b.amt - a.amt);
+  const maxIncomeAmt = incomeRows.length ? incomeRows[0].amt : 0;
+
   return (
     <div className="p-3 md:p-4 max-w-3xl">
       <h2 className="text-lg font-semibold text-gray-800 mb-2.5">Reports — {monthLabel(monthKey)}</h2>
@@ -1376,6 +1395,22 @@ function ReportsView({ monthKey }) {
           <div className="text-[11px] text-gray-500">Net</div>
           <div className={`text-base font-semibold tabular-nums ${moneyClass(net)}`}>{fmt(net)}</div>
         </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border p-3 mb-3">
+        <div className="font-semibold text-gray-800 text-[13px] mb-2">Income by Source</div>
+        {incomeRows.length === 0 && <div className="text-gray-400 text-[13px]">No income recorded this month</div>}
+        {incomeRows.map(r => (
+          <div key={r.name} className="mb-1.5">
+            <div className="flex justify-between text-[13px] mb-0.5">
+              <span className={`font-medium ${r.name === 'Uncategorized' ? 'text-orange-600' : 'text-gray-800'}`}>{r.name}</span>
+              <span className="font-medium tabular-nums text-emerald-700">{fmt(r.amt)}</span>
+            </div>
+            <div className="h-1.5 bg-gray-100 rounded">
+              <div className="h-1.5 bg-emerald-500 rounded" style={{ width: `${maxIncomeAmt ? (r.amt / maxIncomeAmt) * 100 : 0}%` }}></div>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="bg-white rounded-lg shadow-sm border p-3">
