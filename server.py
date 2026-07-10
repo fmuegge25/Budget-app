@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import threading
 import uuid
 from datetime import date, timedelta
 from pathlib import Path
@@ -24,6 +25,14 @@ CORS(app)  # allow requests from other devices on the tailnet
 
 CONFIG_FILE = ROOT / "plaid_config.json"
 STATE_FILE = ROOT / "budget_data.json"
+
+# Guards every read-modify-write of STATE_FILE. Without this, a bank-import
+# request (which reads the file, spends time parsing/merging CSV rows, then
+# writes the whole file back) can race a plain browser save that happens in
+# between: the import's write silently overwrites whatever the browser just
+# saved with the older snapshot it started with. Confirmed as the real cause
+# of budgeted-amount edits appearing to save and then reverting later.
+STATE_LOCK = threading.Lock()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,7 +91,8 @@ def get_state():
 
 @app.route("/api/state", methods=["POST"])
 def save_state():
-    STATE_FILE.write_text(json.dumps(request.json))
+    with STATE_LOCK:
+        STATE_FILE.write_text(json.dumps(request.json))
     return jsonify({"ok": True})
 
 # ── Bank CSV scrape import ───────────────────────────────────────────────────
@@ -125,57 +135,60 @@ def import_csv():
     account_name = body.get("account_name")
     csv_text = body.get("csv_text", "")
 
-    data = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
-    if not data:
-        return jsonify({"error": "No budget data yet — open the app once in a browser first, then re-run this"}), 400
-
-    account = next((a for a in data["accounts"] if a["name"] == account_name), None)
-    if not account:
-        return jsonify({"error": f"No account named '{account_name}' in the budget"}), 400
-    account_id = account["id"]
-
     rows = parse_bank_csv(csv_text)
-    by_date = {}
-    for t in data["transactions"]:
-        if t["accountId"] == account_id:
-            by_date.setdefault(t["date"], []).append(t)
 
-    added = 0
-    updated = 0
-    for r in rows:
-        same_day = by_date.get(r["date"], [])
-        # Exact match already present -- true duplicate, skip.
-        if any(t["description"] == r["description"] and t["amount"] == r["amount"] for t in same_day):
-            continue
-        # Same transaction settling: pending placeholder -> real name, or
-        # same description with the amount finalized (e.g. a tip added).
-        candidate = next(
-            (t for t in same_day if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])),
-            None,
-        ) or next((t for t in same_day if t["description"] == r["description"] and t["amount"] != r["amount"]), None)
-        if candidate:
-            candidate["description"] = r["description"]
-            candidate["amount"] = r["amount"]
-            if r["memo"]:
-                candidate["memo"] = r["memo"]
-            updated += 1
-            continue
-        new_tx = {
-            "id": uuid.uuid4().hex[:8],
-            "date": r["date"],
-            "accountId": account_id,
-            "description": r["description"],
-            "amount": r["amount"],
-            "group": "Deposits" if r["amount"] > 0 else None,
-            "categoryId": None,
-            "memo": r["memo"],
-        }
-        data["transactions"].append(new_tx)
-        same_day.append(new_tx)
-        by_date[r["date"]] = same_day
-        added += 1
+    with STATE_LOCK:
+        data = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
+        if not data:
+            return jsonify({"error": "No budget data yet — open the app once in a browser first, then re-run this"}), 400
 
-    STATE_FILE.write_text(json.dumps(data))
+        account = next((a for a in data["accounts"] if a["name"] == account_name), None)
+        if not account:
+            return jsonify({"error": f"No account named '{account_name}' in the budget"}), 400
+        account_id = account["id"]
+
+        by_date = {}
+        for t in data["transactions"]:
+            if t["accountId"] == account_id:
+                by_date.setdefault(t["date"], []).append(t)
+
+        added = 0
+        updated = 0
+        for r in rows:
+            same_day = by_date.get(r["date"], [])
+            # Exact match already present -- true duplicate, skip.
+            if any(t["description"] == r["description"] and t["amount"] == r["amount"] for t in same_day):
+                continue
+            # Same transaction settling: pending placeholder -> real name, or
+            # same description with the amount finalized (e.g. a tip added).
+            candidate = next(
+                (t for t in same_day if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])),
+                None,
+            ) or next((t for t in same_day if t["description"] == r["description"] and t["amount"] != r["amount"]), None)
+            if candidate:
+                candidate["description"] = r["description"]
+                candidate["amount"] = r["amount"]
+                if r["memo"]:
+                    candidate["memo"] = r["memo"]
+                updated += 1
+                continue
+            new_tx = {
+                "id": uuid.uuid4().hex[:8],
+                "date": r["date"],
+                "accountId": account_id,
+                "description": r["description"],
+                "amount": r["amount"],
+                "group": "Deposits" if r["amount"] > 0 else None,
+                "categoryId": None,
+                "memo": r["memo"],
+            }
+            data["transactions"].append(new_tx)
+            same_day.append(new_tx)
+            by_date[r["date"]] = same_day
+            added += 1
+
+        STATE_FILE.write_text(json.dumps(data))
+
     return jsonify({"ok": True, "added": added, "updated": updated, "parsed": len(rows)})
 
 # ── Routes ───────────────────────────────────────────────────────────────────
