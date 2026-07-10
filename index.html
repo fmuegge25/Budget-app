@@ -292,6 +292,20 @@ function loadInitial() {
 }
 
 // ---------- Budget math ----------
+// A category's budgeted amount carries forward unchanged from whichever
+// month it was last explicitly set in -- it does NOT reset to $0 every new
+// month. Editing "Budgeted" for a month writes an explicit override for
+// that month (SET_ASSIGNED), which then becomes the new carried-forward
+// value for every later month, until the next explicit edit.
+function effectiveAssigned(state, catId, monthKey) {
+  const direct = (state.budgetMonths[monthKey] || {})[catId];
+  if (direct !== undefined) return direct;
+  const priorMonths = Object.keys(state.budgetMonths)
+    .filter(m => m < monthKey && (state.budgetMonths[m] || {})[catId] !== undefined)
+    .sort();
+  return priorMonths.length ? state.budgetMonths[priorMonths[priorMonths.length - 1]][catId] : 0;
+}
+
 function computeCategoryHistory(state, catId, uptoMonthKey) {
   const txMonths = state.transactions.filter(t => t.categoryId === catId).map(t => monthKeyOf(t.date));
   const assignedMonths = Object.keys(state.budgetMonths).filter(m => (state.budgetMonths[m] || {})[catId] !== undefined);
@@ -300,7 +314,7 @@ function computeCategoryHistory(state, catId, uptoMonthKey) {
   const range = monthRange(minMonth, uptoMonthKey);
   let carry = 0, row = { carryIn: 0, assigned: 0, actual: 0, remaining: 0 };
   for (const m of range) {
-    const assigned = (state.budgetMonths[m] || {})[catId] || 0;
+    const assigned = effectiveAssigned(state, catId, m);
     const actual = state.transactions
       .filter(t => t.categoryId === catId && monthKeyOf(t.date) === m)
       .reduce((s, t) => s + t.amount, 0);
@@ -333,8 +347,7 @@ function debtCurrentBalance(state, debt) {
 }
 
 function totalAssignedForMonth(state, monthKey) {
-  const monthData = state.budgetMonths[monthKey] || {};
-  return Object.values(monthData).reduce((s, v) => s + (v || 0), 0);
+  return state.categories.reduce((s, c) => s + effectiveAssigned(state, c.id, monthKey), 0);
 }
 
 function readyToAssign(state, monthKey) {
