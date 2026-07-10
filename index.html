@@ -166,6 +166,10 @@ function reducer(state, action) {
         transactions: state.transactions.filter(t => t.id !== action.id && !(linkId && t.linkId === linkId)),
       };
     }
+    // Undo support for DELETE_TRANSACTION -- re-inserts the exact original
+    // transaction object(s) (both halves, if it was a linked transfer).
+    case 'RESTORE_TRANSACTIONS':
+      return { ...state, transactions: [...state.transactions, ...action.transactions] };
     case 'ADD_TRANSFER': {
       const linkId = uid();
       const out = { id: uid(), date: action.date, accountId: action.fromAccountId, description: `Transfer to ${action.toName}`, amount: -Math.abs(action.amount), group: 'Transfer', categoryId: null, memo: action.memo || '', linkId };
@@ -1552,11 +1556,67 @@ function ReportsView({ monthKey }) {
   );
 }
 
+// Wraps around App's dispatch: shows a brief "Undo" toast after a
+// DELETE_TRANSACTION or UPDATE_TRANSACTION, since both are easy to trigger
+// with a stray click (the delete/edit links sit right next to each other,
+// hover-revealed, on every register row) and previously had no way back
+// short of manually re-entering the transaction. Scoped to just these two
+// action types on purpose -- this is a safety net for accidental clicks,
+// not a full undo/redo history.
+function UndoToast({ info, onDismiss }) {
+  if (!info) return null;
+  return (
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 text-[13px]">
+      <span>{info.label}</span>
+      <button
+        className="font-semibold text-blue-300 hover:text-blue-200"
+        onClick={() => { info.restore(); onDismiss(); }}
+      >Undo</button>
+      <button className="text-gray-400 hover:text-white" onClick={onDismiss} aria-label="Dismiss">✕</button>
+    </div>
+  );
+}
+
 function App() {
   const [state, dispatch] = useReducer(reducer, null, loadInitial);
   const [view, setView] = useState({ type: 'budget' });
   const [monthKey, setMonthKey] = useState(todayMonthKey());
   const [serverReady, setServerReady] = useState(false);
+  const [undoInfo, setUndoInfo] = useState(null);
+  const undoTimerRef = React.useRef(null);
+
+  function armUndo(info) {
+    clearTimeout(undoTimerRef.current);
+    setUndoInfo(info);
+    undoTimerRef.current = setTimeout(() => setUndoInfo(null), 8000);
+  }
+
+  // Every DELETE_TRANSACTION/UPDATE_TRANSACTION anywhere in the app flows
+  // through here (it's what's handed out via BudgetContext), so the undo
+  // toast works from every screen without each call site having to opt in.
+  function dispatchWithUndo(action) {
+    if (action.type === 'DELETE_TRANSACTION') {
+      const target = state.transactions.find(t => t.id === action.id);
+      if (target) {
+        const linked = target.linkId ? state.transactions.filter(t => t.linkId === target.linkId) : [target];
+        armUndo({
+          label: linked.length > 1 ? `Deleted transfer (${fmt(Math.abs(target.amount))})` : `Deleted "${target.description}"`,
+          restore: () => dispatch({ type: 'RESTORE_TRANSACTIONS', transactions: linked }),
+        });
+      }
+    } else if (action.type === 'UPDATE_TRANSACTION') {
+      const target = state.transactions.find(t => t.id === action.id);
+      if (target) {
+        const prevPatch = {};
+        for (const key of Object.keys(action.patch)) prevPatch[key] = target[key];
+        armUndo({
+          label: `Changed "${target.description}"`,
+          restore: () => dispatch({ type: 'UPDATE_TRANSACTION', id: action.id, patch: prevPatch }),
+        });
+      }
+    }
+    dispatch(action);
+  }
 
   // On mount, pull the shared server copy (source of truth across devices) --
   // but only if this device doesn't have local edits that never made it to
@@ -1611,7 +1671,7 @@ function App() {
   }, [state, serverReady]);
 
   return (
-    <BudgetContext.Provider value={{ state, dispatch }}>
+    <BudgetContext.Provider value={{ state, dispatch: dispatchWithUndo }}>
       <div className="flex flex-col md:flex-row">
         <Sidebar view={view} setView={setView} monthKey={monthKey} setMonthKey={setMonthKey} />
         <div className="flex-1 md:h-screen overflow-y-auto">
@@ -1624,6 +1684,7 @@ function App() {
           {view.type === 'manage-categories' && <ManageCategoriesView />}
         </div>
       </div>
+      <UndoToast info={undoInfo} onDismiss={() => setUndoInfo(null)} />
     </BudgetContext.Provider>
   );
 }
