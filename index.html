@@ -200,6 +200,25 @@ function reducer(state, action) {
       });
       return { ...state, transactions };
     }
+    case 'MERGE_TO_TRANSFER': {
+      // Two separately-imported, unlinked transactions (e.g. both sides of
+      // a real bank transfer, each imported independently from its own
+      // account's CSV) get replaced by one properly linked Transfer pair,
+      // same shape ADD_TRANSFER produces. The raw originals are deleted so
+      // nothing gets double-counted as fake expense + fake income.
+      const txA = state.transactions.find(t => t.id === action.idA);
+      const txB = state.transactions.find(t => t.id === action.idB);
+      if (!txA || !txB) return state;
+      const [outTx, inTx] = txA.amount < 0 ? [txA, txB] : [txB, txA];
+      const fromAcc = state.accounts.find(a => a.id === outTx.accountId);
+      const toAcc = state.accounts.find(a => a.id === inTx.accountId);
+      const linkId = uid();
+      const amount = Math.abs(outTx.amount);
+      const newOut = { id: uid(), date: outTx.date, accountId: outTx.accountId, description: `Transfer to ${toAcc ? toAcc.name : ''}`, amount: -amount, group: 'Transfer', categoryId: null, memo: outTx.memo || inTx.memo || '', linkId };
+      const newIn = { id: uid(), date: outTx.date, accountId: inTx.accountId, description: `Transfer from ${fromAcc ? fromAcc.name : ''}`, amount, group: 'Transfer', categoryId: null, memo: outTx.memo || inTx.memo || '', linkId };
+      const remaining = state.transactions.filter(t => t.id !== txA.id && t.id !== txB.id);
+      return { ...state, transactions: [...remaining, newOut, newIn] };
+    }
     case 'SET_ASSIGNED': {
       const monthData = { ...(state.budgetMonths[action.monthKey] || {}) };
       monthData[action.categoryId] = action.amount;
@@ -402,6 +421,35 @@ function needsCategorizing(t) {
 
 function countUncategorized(state) {
   return state.transactions.filter(needsCategorizing).length;
+}
+
+// Finds likely-transfer pairs sitting in the uncategorized queue: same
+// amount, opposite sign, different accounts, posted within a couple days of
+// each other (bank-to-bank posting isn't always same-day). Scoped to
+// needsCategorizing() only -- an already-linked or already-categorized
+// transaction is left alone, so this only ever offers to merge things that
+// haven't been touched yet, never something the user already decided on.
+function findTransferCandidates(state) {
+  const pool = state.transactions.filter(t => !t.linkId && needsCategorizing(t));
+  const used = new Set();
+  const pairs = [];
+  for (let i = 0; i < pool.length; i++) {
+    const a = pool[i];
+    if (used.has(a.id)) continue;
+    for (let j = i + 1; j < pool.length; j++) {
+      const b = pool[j];
+      if (used.has(b.id)) continue;
+      if (a.accountId === b.accountId) continue;
+      if (Math.abs(a.amount) !== Math.abs(b.amount)) continue;
+      if ((a.amount < 0) === (b.amount < 0)) continue;
+      const daysApart = Math.abs((new Date(a.date) - new Date(b.date)) / 86400000);
+      if (daysApart > 2) continue;
+      pairs.push(a.amount < 0 ? [a, b] : [b, a]); // [outTx, inTx]
+      used.add(a.id); used.add(b.id);
+      break;
+    }
+  }
+  return pairs;
 }
 
 // ---------- Context ----------
@@ -1157,14 +1205,46 @@ function CategorizeCard({ t }) {
   );
 }
 
+function TransferMatchCard({ outTx, inTx }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const accName = (id) => (state.accounts.find(a => a.id === id) || {}).name || '—';
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 flex items-center justify-between gap-3">
+      <div className="min-w-0 text-[13px]">
+        <div className="font-semibold text-gray-800 mb-0.5">Looks like a transfer between your accounts</div>
+        <div className="text-gray-600 tabular-nums">
+          {accName(outTx.accountId)} <span className="text-red-600">{fmt(outTx.amount)}</span> ({outTx.date})
+          <span className="text-gray-400 mx-1.5">→</span>
+          {accName(inTx.accountId)} <span className="text-emerald-700">{fmt(inTx.amount)}</span> ({inTx.date})
+        </div>
+      </div>
+      <button
+        className="shrink-0 px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700"
+        onClick={() => dispatch({ type: 'MERGE_TO_TRANSFER', idA: outTx.id, idB: inTx.id })}
+      >
+        Merge into Transfer
+      </button>
+    </div>
+  );
+}
+
 function CategorizeView() {
   const { state } = useContext(BudgetContext);
   const rows = state.transactions.filter(needsCategorizing).sort((a, b) => b.date.localeCompare(a.date));
+  const transferCandidates = findTransferCandidates(state);
 
   return (
     <div className="p-3 md:p-4">
       <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
       <p className="text-xs text-gray-500 mb-2.5">Pick a Group and Category for each — it saves immediately, no extra click.</p>
+      {transferCandidates.length > 0 && (
+        <div className="mb-3">
+          {transferCandidates.map(([outTx, inTx]) => (
+            <TransferMatchCard key={outTx.id + inTx.id} outTx={outTx} inTx={inTx} />
+          ))}
+        </div>
+      )}
       {rows.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">All caught up — nothing left to categorize.</div>
       ) : (
