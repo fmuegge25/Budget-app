@@ -34,6 +34,14 @@ STATE_FILE = ROOT / "budget_data.json"
 # of budgeted-amount edits appearing to save and then reverting later.
 STATE_LOCK = threading.Lock()
 
+# Every already-imported month up through June 2026 is fully categorized by
+# hand -- the scheduled bank scraper re-downloads a rolling CSV window on
+# every run, and this floor keeps it from ever re-adding (or partially
+# re-matching) anything that old, even if a description happens not to match
+# byte-for-byte against what's already in budget_data.json. Only touches new
+# imports going forward; nothing already in the budget is affected.
+IMPORT_CUTOFF_DATE = "2026-07-01"
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def load_config():
@@ -135,7 +143,8 @@ def import_csv():
     account_name = body.get("account_name")
     csv_text = body.get("csv_text", "")
 
-    rows = parse_bank_csv(csv_text)
+    all_rows = parse_bank_csv(csv_text)
+    rows = [r for r in all_rows if r["date"] >= IMPORT_CUTOFF_DATE]
 
     with STATE_LOCK:
         data = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
@@ -189,7 +198,7 @@ def import_csv():
 
         STATE_FILE.write_text(json.dumps(data))
 
-    return jsonify({"ok": True, "added": added, "updated": updated, "parsed": len(rows)})
+    return jsonify({"ok": True, "added": added, "updated": updated, "parsed": len(all_rows)})
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 

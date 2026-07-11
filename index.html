@@ -148,7 +148,21 @@ function sampleData() {
     { id: uid(), name: 'FM Feeders', startingBalance: 442.36 },
     { id: uid(), name: 'Credit Card', startingBalance: 0 },
   ];
-  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [] };
+  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [], rules: [] };
+}
+
+// Auto-categorize rules: description contains `match` (case-insensitive) ->
+// always this category. Checked against a raw description string so both
+// new imports and the bulk "apply to existing" pass can share it.
+function matchRule(state, description) {
+  const desc = (description || '').toLowerCase();
+  for (const r of state.rules || []) {
+    if (r.match && desc.includes(r.match.toLowerCase())) {
+      const cat = state.categories.find(c => c.id === r.categoryId);
+      if (cat) return { group: cat.group, categoryId: r.categoryId };
+    }
+  }
+  return null;
 }
 
 // ---------- Reducer ----------
@@ -274,16 +288,19 @@ function reducer(state, action) {
       );
       const newTxns = action.rows
         .filter(r => !existingKeys.has(`${r.date}|${r.description}|${r.amount}`))
-        .map(r => ({
-          id: uid(),
-          date: r.date,
-          accountId: action.accountId,
-          description: r.description,
-          amount: r.amount,
-          group: r.amount > 0 ? 'Deposits' : null,
-          categoryId: null,
-          memo: r.memo || '',
-        }));
+        .map(r => {
+          const rule = matchRule(state, r.description);
+          return {
+            id: uid(),
+            date: r.date,
+            accountId: action.accountId,
+            description: r.description,
+            amount: r.amount,
+            group: rule ? rule.group : (r.amount > 0 ? 'Deposits' : null),
+            categoryId: rule ? rule.categoryId : null,
+            memo: r.memo || '',
+          };
+        });
       return { ...state, transactions: [...state.transactions, ...newTxns] };
     }
     case 'BANK_SYNC': {
@@ -291,22 +308,43 @@ function reducer(state, action) {
       const existingPlaidIds = new Set(state.transactions.filter(t => t.plaidId).map(t => t.plaidId));
       const newTxns = (action.added || [])
         .filter(t => !existingPlaidIds.has(t.id))
-        .map(t => ({
-          id: uid(),
-          plaidId: t.id,
-          date: t.date,
-          accountId: action.accountId,
-          description: t.payee || t.memo || 'Bank transaction',
-          amount: t.amount,
-          group: t.amount > 0 ? 'Deposits' : null,
-          categoryId: null,
-          memo: t.memo || '',
-        }));
+        .map(t => {
+          const description = t.payee || t.memo || 'Bank transaction';
+          const rule = matchRule(state, description);
+          return {
+            id: uid(),
+            plaidId: t.id,
+            date: t.date,
+            accountId: action.accountId,
+            description,
+            amount: t.amount,
+            group: rule ? rule.group : (t.amount > 0 ? 'Deposits' : null),
+            categoryId: rule ? rule.categoryId : null,
+            memo: t.memo || '',
+          };
+        });
       return {
         ...state,
         transactions: [...state.transactions.filter(t => !(t.plaidId && removed.has(t.plaidId))), ...newTxns],
       };
     }
+    case 'ADD_RULE': {
+      const rule = { id: uid(), match: action.match, categoryId: action.categoryId };
+      const cat = state.categories.find(c => c.id === action.categoryId);
+      const matchLower = action.match.toLowerCase();
+      // Sweeps the existing uncategorized queue immediately, not just future
+      // imports -- so adding a rule for "CLC" also clears out every past CLC
+      // transaction already sitting there, not just ones from here on.
+      const transactions = state.transactions.map(t => {
+        if (cat && needsCategorizing(t) && t.description && t.description.toLowerCase().includes(matchLower)) {
+          return { ...t, group: cat.group, categoryId: action.categoryId };
+        }
+        return t;
+      });
+      return { ...state, rules: [...(state.rules || []), rule], transactions };
+    }
+    case 'DELETE_RULE':
+      return { ...state, rules: (state.rules || []).filter(r => r.id !== action.id) };
     case 'LOAD':
       return migrateDebts({ debts: [], ...action.state });
     case 'ADD_DEBT': {
@@ -341,7 +379,7 @@ function migrateDebts(state) {
     if (!cat) { cat = { id: uid(), group: 'Debts', name: d.name }; categories.push(cat); }
     return { ...d, categoryId: cat.id };
   });
-  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {} };
+  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {}, rules: state.rules || [] };
 }
 
 function loadInitial() {
@@ -1152,23 +1190,47 @@ function GroupCategoryPicker({ t }) {
     dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { group: nextGroup, categoryId: nextCategoryId || null } });
   }
 
+  // Selecting an option (incl. arrow-key preview) only updates local state --
+  // it does not save. Save only happens on Enter, so tabbing between the two
+  // dropdowns while still deciding never commits a half-finished pick.
+  function onKeyDown(e) {
+    if (e.key === 'Enter') commit(group, categoryId);
+  }
+
+  function addRule() {
+    if (!categoryId) { window.alert('Pick a category first.'); return; }
+    const match = window.prompt('Always categorize transactions whose description contains:', t.description || '');
+    if (match && match.trim()) {
+      dispatch({ type: 'ADD_RULE', match: match.trim(), categoryId });
+      commit(group, categoryId);
+    }
+  }
+
   return (
     <>
       <select
         value={group}
-        onChange={e => { setGroup(e.target.value); setCategoryId(''); commit(e.target.value, ''); }}
+        onChange={e => { setGroup(e.target.value); setCategoryId(''); }}
+        onKeyDown={onKeyDown}
         className="border rounded px-2 py-1.5 text-sm bg-white"
       >
         {CATEGORIZABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
       </select>
       <select
         value={categoryId}
-        onChange={e => { setCategoryId(e.target.value); commit(group, e.target.value); }}
+        onChange={e => setCategoryId(e.target.value)}
+        onKeyDown={onKeyDown}
         className="border rounded px-2 py-1.5 text-sm bg-white"
       >
         <option value="">— pick category —</option>
         {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
+      <button
+        type="button"
+        onClick={addRule}
+        title="Always categorize transactions like this one the same way"
+        className="text-xs text-blue-600 hover:underline whitespace-nowrap px-1"
+      >+ rule</button>
     </>
   );
 }
@@ -1233,6 +1295,66 @@ function TransferMatchCard({ outTx, inTx }) {
   );
 }
 
+function RulesPanel() {
+  const { state, dispatch } = useContext(BudgetContext);
+  const [open, setOpen] = useState(false);
+  const [match, setMatch] = useState('');
+  const [group, setGroup] = useState(CATEGORIZABLE_GROUPS[0]);
+  const [categoryId, setCategoryId] = useState('');
+  const rules = state.rules || [];
+  const catOptions = state.categories.filter(c => c.group === group);
+
+  function addRule() {
+    if (!match.trim() || !categoryId) return;
+    dispatch({ type: 'ADD_RULE', match: match.trim(), categoryId });
+    setMatch('');
+    setCategoryId('');
+  }
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="text-xs text-blue-600 hover:underline"
+      >{open ? 'Hide' : 'Manage'} rules{rules.length ? ` (${rules.length})` : ''}</button>
+      {open && (
+        <div className="bg-white rounded-lg shadow-sm border p-2.5 mt-1.5">
+          {rules.length > 0 && (
+            <div className="mb-2 space-y-1">
+              {rules.map(r => {
+                const cat = state.categories.find(c => c.id === r.categoryId);
+                return (
+                  <div key={r.id} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                    <span>contains <span className="font-semibold">"{r.match}"</span> → <span className="font-semibold">{cat ? cat.name : '—'}</span></span>
+                    <button className="text-red-500 hover:underline" onClick={() => dispatch({ type: 'DELETE_RULE', id: r.id })}>remove</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5 items-center">
+            <input
+              value={match}
+              onChange={e => setMatch(e.target.value)}
+              placeholder='description contains e.g. "CLC"'
+              className="border rounded px-2 py-1 text-sm flex-1 min-w-[140px]"
+            />
+            <select value={group} onChange={e => { setGroup(e.target.value); setCategoryId(''); }} className="border rounded px-2 py-1 text-sm bg-white">
+              {CATEGORIZABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+            <select value={categoryId} onChange={e => setCategoryId(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white">
+              <option value="">— category —</option>
+              {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button onClick={addRule} className="px-2.5 py-1 bg-blue-600 text-white rounded text-sm">Add Rule</button>
+          </div>
+          <div className="text-[11px] text-gray-400 mt-1">Applies immediately to matching uncategorized transactions below, and automatically to new imports going forward.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CategorizeView() {
   const { state } = useContext(BudgetContext);
   const rows = state.transactions.filter(needsCategorizing).sort((a, b) => b.date.localeCompare(a.date));
@@ -1241,7 +1363,8 @@ function CategorizeView() {
   return (
     <div className="p-3 md:p-4">
       <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
-      <p className="text-xs text-gray-500 mb-2.5">Pick a Group and Category for each — it saves immediately, no extra click.</p>
+      <p className="text-xs text-gray-500 mb-2.5">Pick a Group and Category for each, then press Enter to save.</p>
+      <RulesPanel />
       {transferCandidates.length > 0 && (
         <div className="mb-3">
           {transferCandidates.map(([outTx, inTx]) => (
