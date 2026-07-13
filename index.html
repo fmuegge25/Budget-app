@@ -10,12 +10,14 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="Budget" />
 <meta name="theme-color" content="#2563eb" />
+<meta name="color-scheme" content="light" />
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 <style>
+  html, body { background: #f3f4f6; }
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 </style>
@@ -148,7 +150,7 @@ function sampleData() {
     { id: uid(), name: 'FM Feeders', startingBalance: 442.36 },
     { id: uid(), name: 'Credit Card', startingBalance: 0 },
   ];
-  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [], rules: [] };
+  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [], rules: [], balanceOverrides: {} };
 }
 
 // Auto-categorize rules: description contains `match` (case-insensitive) ->
@@ -169,7 +171,11 @@ function matchRule(state, description) {
 function reducer(state, action) {
   switch (action.type) {
     case 'ADD_TRANSACTION':
-      return { ...state, transactions: [...state.transactions, { id: uid(), ...action.tx }] };
+      // manual: true marks this as typed in by hand (the only path that
+      // creates one) -- the bank-import dedup logic checks this flag so it
+      // never silently overwrites a manual entry's amount/description
+      // thinking it's a pending transaction settling.
+      return { ...state, transactions: [...state.transactions, { id: uid(), manual: true, ...action.tx }] };
     case 'UPDATE_TRANSACTION':
       return { ...state, transactions: state.transactions.map(t => t.id === action.id ? { ...t, ...action.patch } : t) };
     case 'DELETE_TRANSACTION': {
@@ -278,6 +284,23 @@ function reducer(state, action) {
       return { ...state, accounts: state.accounts.map(a => a.id === action.id ? { ...a, name: action.name } : a) };
     case 'SET_STARTING_BALANCE':
       return { ...state, accounts: state.accounts.map(a => a.id === action.id ? { ...a, startingBalance: action.startingBalance } : a) };
+    case 'SET_BALANCE_OVERRIDE': {
+      // Corrects an account's balance as of a specific date without
+      // touching history -- same pattern as SET_CARRY_OVERRIDE above, but
+      // for account balances instead of category carry-in. accountBalance()
+      // uses the most recent override as its new base and only adds
+      // transactions dated *after* it, so nothing before that date (already
+      // baked into the corrected number) gets double-counted, and nothing
+      // about prior dates/reports changes.
+      const forAccount = { ...((state.balanceOverrides || {})[action.accountId] || {}) };
+      forAccount[action.date] = action.amount;
+      return { ...state, balanceOverrides: { ...(state.balanceOverrides || {}), [action.accountId]: forAccount } };
+    }
+    case 'DELETE_BALANCE_OVERRIDE': {
+      const forAccount = { ...((state.balanceOverrides || {})[action.accountId] || {}) };
+      delete forAccount[action.date];
+      return { ...state, balanceOverrides: { ...(state.balanceOverrides || {}), [action.accountId]: forAccount } };
+    }
     case 'DELETE_ACCOUNT':
       return { ...state, accounts: state.accounts.filter(a => a.id !== action.id), transactions: state.transactions.filter(t => t.accountId !== action.id) };
     case 'IMPORT_CSV': {
@@ -379,7 +402,7 @@ function migrateDebts(state) {
     if (!cat) { cat = { id: uid(), group: 'Debts', name: d.name }; categories.push(cat); }
     return { ...d, categoryId: cat.id };
   });
-  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {}, rules: state.rules || [] };
+  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {}, rules: state.rules || [], balanceOverrides: state.balanceOverrides || {} };
 }
 
 function loadInitial() {
@@ -430,8 +453,20 @@ function computeCategoryHistory(state, catId, uptoMonthKey) {
 function accountBalance(state, accountId) {
   const acc = state.accounts.find(a => a.id === accountId);
   if (!acc) return 0;
-  const sum = state.transactions.filter(t => t.accountId === accountId).reduce((s, t) => s + t.amount, 0);
-  return acc.startingBalance + sum;
+  const txns = state.transactions.filter(t => t.accountId === accountId);
+  const overrides = (state.balanceOverrides || {})[accountId] || {};
+  const overrideDates = Object.keys(overrides).sort();
+  if (overrideDates.length === 0) {
+    return acc.startingBalance + txns.reduce((s, t) => s + t.amount, 0);
+  }
+  // Most recent correction becomes the new base -- only transactions dated
+  // *after* it still accumulate on top, so anything already baked into the
+  // corrected number (including a stray old transaction that shows up
+  // later) never gets double-counted, and every date up through the
+  // correction point is left exactly as it was.
+  const latest = overrideDates[overrideDates.length - 1];
+  const sumAfter = txns.filter(t => t.date > latest).reduce((s, t) => s + t.amount, 0);
+  return overrides[latest] + sumAfter;
 }
 
 // Amount paid toward a debt so far = all transactions categorized to its
@@ -626,12 +661,17 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
               >rename</button>
               <button
                 className="text-gray-300 hover:text-blue-500 text-xs"
+                title="Correct the balance as of a specific date -- doesn't change any earlier date's balance, only that date forward"
                 onClick={(e) => {
                   e.stopPropagation();
-                  const val = window.prompt('Starting balance', a.startingBalance);
+                  const dateVal = window.prompt(`Correct ${a.name}'s balance as of which date? (defaults to today)`, todayStr());
+                  if (dateVal === null) return;
+                  const asOf = dateVal.trim() || todayStr();
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) { window.alert('Please enter the date as YYYY-MM-DD.'); return; }
+                  const val = window.prompt(`Correct ${a.name}'s balance to, as of ${asOf}:`, accountBalance(state, a.id));
                   if (val === null) return;
                   const num = parseFloat(val);
-                  if (!isNaN(num)) dispatch({ type: 'SET_STARTING_BALANCE', id: a.id, startingBalance: num });
+                  if (!isNaN(num)) dispatch({ type: 'SET_BALANCE_OVERRIDE', accountId: a.id, date: asOf, amount: num });
                 }}
               >balance</button>
               <button
@@ -857,26 +897,26 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
 
   return (
     <tr className="bg-blue-50">
-      <td className="px-2 py-1"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="border rounded px-1 py-0.5 text-sm" /></td>
+      <td className="px-2 py-1"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="border rounded px-1 py-0.5 text-sm w-full" /></td>
       <td className="px-2 py-1">
         {group === 'Transfer'
           ? <span className="text-gray-400 text-sm italic">Transfer</span>
           : <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description" className="border rounded px-1 py-0.5 text-sm w-full" />}
       </td>
-      <td className="px-2 py-1"><input value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" className="border rounded px-1 py-0.5 text-sm w-24 text-right" /></td>
+      <td className="px-2 py-1"><input value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" className="border rounded px-1 py-0.5 text-sm w-full text-right" /></td>
       <td className="px-2 py-1">
-        <select value={group} onChange={e => { setGroup(e.target.value); setCategoryId(''); setToAccountId(''); }} className="border rounded px-1 py-0.5 text-sm">
+        <select value={group} onChange={e => { setGroup(e.target.value); setCategoryId(''); setToAccountId(''); }} className="border rounded px-1 py-0.5 text-sm w-full">
           {ALL_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
       </td>
       <td className="px-2 py-1">
         {group === 'Transfer' ? (
-          <select value={toAccountId} onChange={e => setToAccountId(e.target.value)} className="border rounded px-1 py-0.5 text-sm">
+          <select value={toAccountId} onChange={e => setToAccountId(e.target.value)} className="border rounded px-1 py-0.5 text-sm w-full">
             <option value="">{isIncomingTransfer ? '— from account —' : '— to account —'}</option>
             {otherAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
         ) : (
-          <select value={categoryId} onChange={e => setCategoryId(e.target.value)} className="border rounded px-1 py-0.5 text-sm">
+          <select value={categoryId} onChange={e => setCategoryId(e.target.value)} className="border rounded px-1 py-0.5 text-sm w-full">
             <option value="">— category —</option>
             {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
@@ -1122,7 +1162,17 @@ function RegisterView({ accountId }) {
       <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
         {account && <BankSyncBar account={account} />}
         <CsvImportButton accountId={accountId} />
-        <table className="w-full text-[13px]">
+        <table className="w-full text-[13px] table-fixed">
+          <colgroup>
+            <col className="w-[11%]" />
+            <col className="w-[27%]" />
+            <col className="w-[9%]" />
+            <col className="w-[7%]" />
+            <col className="w-[12%]" />
+            <col className="w-[12%]" />
+            <col className="w-[10%]" />
+            <col className="w-[12%]" />
+          </colgroup>
           <thead>
             <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
               <th className="text-left px-2 py-1.5 font-semibold">Date</th>
@@ -1150,12 +1200,12 @@ function RegisterView({ accountId }) {
               ) : (
                 <tr key={t.id} className={`border-b last:border-0 hover:bg-blue-50/60 transition-colors group ${!t.group ? 'bg-orange-50' : i % 2 === 1 ? 'bg-gray-100/70' : ''}`}>
                   <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
-                  <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
-                  <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-                  <td className="px-2 py-1">{t.group || '—'}</td>
-                  <td className={`px-2 py-1 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
-                  <td className="px-2 py-1 text-gray-500">{t.memo}</td>
-                  <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
+                  <td className="px-2 py-1 font-medium text-gray-800 truncate" title={t.description}>{t.description}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
+                  <td className="px-2 py-1 truncate">{t.group || '—'}</td>
+                  <td className={`px-2 py-1 truncate ${!t.group ? 'text-orange-600 font-medium' : ''}`} title={catName(t)}>{catName(t)}</td>
+                  <td className="px-2 py-1 text-gray-500 truncate" title={t.memo}>{t.memo}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
                   <td className="px-2 py-1 whitespace-nowrap">
                     <button
                       className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-blue-500 text-xs mr-2"
@@ -1186,23 +1236,68 @@ function GroupCategoryPicker({ t }) {
   const [categoryId, setCategoryId] = useState(t.categoryId || '');
   const catOptions = state.categories.filter(c => c.group === group);
 
+  // Mobile's native <select> picker fires 'change' then 'blur' back-to-back,
+  // often before React has re-rendered from the 'change' handler's setState --
+  // so onBlur/onKeyDown reading `group`/`categoryId` straight from state can
+  // commit a stale (pre-selection) value, which is why picks were silently
+  // not saving. Refs are updated synchronously in onChange so commit() always
+  // sees the true latest selection regardless of render timing.
+  const groupRef = React.useRef(group);
+  const categoryIdRef = React.useRef(categoryId);
+
   function commit(nextGroup, nextCategoryId) {
     dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { group: nextGroup, categoryId: nextCategoryId || null } });
   }
 
   // Selecting an option (incl. arrow-key preview) only updates local state --
-  // it does not save. Save only happens on Enter, so tabbing between the two
-  // dropdowns while still deciding never commits a half-finished pick.
+  // it does not save on its own. Saves on Enter (desktop keyboard) and on
+  // blur (mobile: there's no keyboard "Enter" event when a native picker
+  // wheel is dismissed, only a blur -- Enter-only silently broke saving on
+  // phones entirely). Blur doesn't reintroduce the original Tab-feels-like-
+  // premature-save bug: that was arrow-key *preview* firing onChange on
+  // every keypress while still focused/deciding, not blur -- blur only
+  // fires once focus genuinely leaves the field, i.e. the user is done.
   function onKeyDown(e) {
-    if (e.key === 'Enter') commit(group, categoryId);
+    if (e.key === 'Enter') commit(groupRef.current, categoryIdRef.current);
+  }
+  function onBlur() {
+    commit(groupRef.current, categoryIdRef.current);
   }
 
+  // Safety net: onBlur/onKeyDown only fire on a *completed* interaction
+  // (dismiss the picker, click away, press Enter). If the user picks a
+  // category and is interrupted right then -- a call, switching apps,
+  // locking the phone -- before doing any of those, the pick sits in local
+  // state/refs only and is silently lost with no commit ever triggered.
+  // Confirmed via a live repro: picking a category then closing the tab
+  // with zero follow-up interaction reverted to uncategorized. Catching
+  // 'visibilitychange' (tab backgrounded) and 'pagehide' (navigating away/
+  // closing) covers both the "switched apps" and "closed the tab" cases.
+  // Guarded on categoryId actually differing from the transaction's last
+  // known saved value, so untouched rows (the vast majority at any given
+  // moment) don't fire spurious commits.
+  React.useEffect(() => {
+    function commitIfDirty() {
+      if (categoryIdRef.current && categoryIdRef.current !== (t.categoryId || '')) {
+        commit(groupRef.current, categoryIdRef.current);
+      }
+    }
+    function onVisibility() { if (document.hidden) commitIfDirty(); }
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', commitIfDirty);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', commitIfDirty);
+    };
+  }, []);
+
   function addRule() {
-    if (!categoryId) { window.alert('Pick a category first.'); return; }
+    const currentCategoryId = categoryIdRef.current;
+    if (!currentCategoryId) { window.alert('Pick a category first.'); return; }
     const match = window.prompt('Always categorize transactions whose description contains:', t.description || '');
     if (match && match.trim()) {
-      dispatch({ type: 'ADD_RULE', match: match.trim(), categoryId });
-      commit(group, categoryId);
+      dispatch({ type: 'ADD_RULE', match: match.trim(), categoryId: currentCategoryId });
+      commit(groupRef.current, currentCategoryId);
     }
   }
 
@@ -1210,16 +1305,28 @@ function GroupCategoryPicker({ t }) {
     <>
       <select
         value={group}
-        onChange={e => { setGroup(e.target.value); setCategoryId(''); }}
+        onChange={e => {
+          const nextGroup = e.target.value;
+          groupRef.current = nextGroup;
+          categoryIdRef.current = '';
+          setGroup(nextGroup);
+          setCategoryId('');
+        }}
         onKeyDown={onKeyDown}
+        onBlur={onBlur}
         className="border rounded px-2 py-1.5 text-sm bg-white"
       >
         {CATEGORIZABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
       </select>
       <select
         value={categoryId}
-        onChange={e => setCategoryId(e.target.value)}
+        onChange={e => {
+          const nextCategoryId = e.target.value;
+          categoryIdRef.current = nextCategoryId;
+          setCategoryId(nextCategoryId);
+        }}
         onKeyDown={onKeyDown}
+        onBlur={onBlur}
         className="border rounded px-2 py-1.5 text-sm bg-white"
       >
         <option value="">— pick category —</option>
@@ -1404,6 +1511,7 @@ function CategorizeView() {
 
 function AllAccountsView({ setView }) {
   const { state } = useContext(BudgetContext);
+  const [categoryFilter, setCategoryFilter] = useState('');
   const accName = (id) => { const a = state.accounts.find(a => a.id === id); return a ? a.name : '—'; };
   function catName(t) {
     if (t.group === 'Deposits') return 'Deposit';
@@ -1412,11 +1520,47 @@ function AllAccountsView({ setView }) {
     const c = state.categories.find(c => c.id === t.categoryId);
     return c ? c.name : '—';
   }
-  const rows = state.transactions.slice().sort((a, b) => b.date.localeCompare(a.date));
+  function matchesFilter(t) {
+    if (!categoryFilter) return true;
+    if (categoryFilter === '__uncategorized__') return !t.group;
+    if (categoryFilter === '__deposits__') return t.group === 'Deposits';
+    if (categoryFilter === '__transfer__') return t.group === 'Transfer';
+    return t.categoryId === categoryFilter;
+  }
+  const rows = state.transactions.filter(matchesFilter).sort((a, b) => b.date.localeCompare(a.date));
+  const filteredTotal = rows.reduce((s, t) => s + t.amount, 0);
 
   return (
     <div className="p-3 md:p-4">
       <h2 className="text-lg font-semibold text-gray-800 mb-2.5">All Accounts</h2>
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <label className="text-xs text-gray-500">Category:</label>
+        <select
+          value={categoryFilter}
+          onChange={e => setCategoryFilter(e.target.value)}
+          className="border rounded px-2 py-1 text-sm bg-white"
+        >
+          <option value="">All transactions</option>
+          <option value="__uncategorized__">Needs categorizing</option>
+          <option value="__deposits__">Deposits (all)</option>
+          <option value="__transfer__">Transfers</option>
+          {CATEGORIZABLE_GROUPS.map(g => {
+            const opts = state.categories.filter(c => c.group === g);
+            if (!opts.length) return null;
+            return (
+              <optgroup key={g} label={g}>
+                {opts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </optgroup>
+            );
+          })}
+        </select>
+        {categoryFilter && (
+          <span className="text-xs text-gray-500">
+            {rows.length} transaction{rows.length === 1 ? '' : 's'} · total{' '}
+            <span className={`font-semibold tabular-nums ${moneyClass(filteredTotal)}`}>{fmt(filteredTotal)}</span>
+          </span>
+        )}
+      </div>
       <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
         <table className="w-full text-[13px]">
           <thead>
@@ -1445,7 +1589,9 @@ function AllAccountsView({ setView }) {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan="6" className="px-2 py-6 text-center text-gray-400">No transactions yet</td></tr>
+              <tr><td colSpan="6" className="px-2 py-6 text-center text-gray-400">
+                {categoryFilter ? 'No transactions in this category' : 'No transactions yet'}
+              </td></tr>
             )}
           </tbody>
         </table>
@@ -1761,6 +1907,28 @@ function App() {
   const stateRef = React.useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
 
+  // Tracks the server's revision counter (see server.py's save_state) --
+  // deliberately a plain ref, NOT reducer state. Updating it must never
+  // trigger the push effect below on its own (it depends on `state`), or
+  // every save would immediately re-trigger another save in a loop. A save
+  // is only accepted by the server if this matches what's actually on disk
+  // right now -- a stale/rejected push means another tab, a phone, or the
+  // daily bank import saved something first, and this client's copy is out
+  // of date.
+  const revRef = React.useRef(0);
+
+  // Set right before every dispatch({type:'LOAD'}) below (mount load, and
+  // conflict recovery in the push effect further down). A LOAD means "this
+  // state now exactly mirrors what the server already has" -- without this
+  // flag, the state change from LOAD would itself trigger the push effect
+  // to immediately echo the same data straight back as a "new" save. That
+  // was harmless before _rev existed, but now it burns a real revision
+  // bump for zero actual changes -- and two tabs each doing this on mount
+  // around the same time was enough to make each one's very next genuine
+  // edit spuriously conflict with the other, even though neither tab had
+  // actually touched the same thing. Confirmed via a real two-tab test.
+  const justLoadedRef = React.useRef(false);
+
   useEffect(() => {
     const syncedRaw = localStorage.getItem('simplebudget1_synced');
     fetch('/api/state')
@@ -1769,8 +1937,11 @@ function App() {
         if (!serverState) return;
         const localIsDirty = syncedRaw !== null && syncedRaw !== JSON.stringify(stateRef.current);
         if (localIsDirty) return;
-        dispatch({ type: 'LOAD', state: serverState });
-        localStorage.setItem('simplebudget1_synced', JSON.stringify(serverState));
+        const { _rev, ...rest } = serverState;
+        revRef.current = _rev || 0;
+        justLoadedRef.current = true;
+        dispatch({ type: 'LOAD', state: rest });
+        localStorage.setItem('simplebudget1_synced', JSON.stringify(rest));
       })
       .catch(() => {})
       .finally(() => setServerReady(true));
@@ -1779,18 +1950,124 @@ function App() {
   // Cache locally always; push to the shared server once we know we're not
   // about to clobber it with stale pre-load data. On a confirmed successful
   // push, record this exact state as the last-known-synced snapshot so a
-  // future mount can tell local edits apart from server data.
+  // future mount can tell local edits apart from server data. A 409 means
+  // the server rejected this push because something else saved first --
+  // pulling in the real current data and saying so beats silently losing
+  // whatever changed elsewhere (or silently losing this tab's own edit by
+  // guessing wrong), which is what happened before this check existed.
+  //
+  // saveInFlightRef/pendingSaveRef serialize saves to exactly one at a time.
+  // Without this, rapid edits (e.g. quickly categorizing several
+  // transactions in a row) could fire two overlapping POSTs -- the first
+  // to land bumps the server's revision, so the second (built from the
+  // now-stale revision it captured before either request finished) gets
+  // rejected as a "conflict" even though it was this same tab's own very
+  // next edit, not anything external. Queuing collapses any edits that
+  // arrive while a save is in flight into one follow-up save of whatever
+  // is truly current (via stateRef) once that save finishes, instead of
+  // firing a second one that could race it.
+  const saveInFlightRef = React.useRef(false);
+  const pendingSaveRef = React.useRef(false);
+
   useEffect(() => {
     localStorage.setItem('simplebudget1', JSON.stringify(state));
+    if (justLoadedRef.current) { justLoadedRef.current = false; return; }
     if (!serverReady) return;
-    const body = JSON.stringify(state);
-    fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
-      .then(() => localStorage.setItem('simplebudget1_synced', body))
-      .catch(() => {});
+
+    // On a 409, the old behavior was to just load the server's copy and
+    // discard whatever this tab was trying to save (with only a passive
+    // alert as a trace). But the overwhelmingly common conflict shape is
+    // NON-overlapping edits -- the daily bank scraper (or another device)
+    // added/changed different transactions than the ones this tab just
+    // categorized. Discarding in that case looked exactly like "categorizing
+    // doesn't save" any time the scraper's 7am run landed while a phone's
+    // tab/PWA had been sitting open since before it. So: reapply just the
+    // transactions THIS tab actually changed onto the server's fresh copy,
+    // then retry -- but ONLY for records the server hasn't independently
+    // touched. A first version of this merged *every* locally-changed
+    // transaction unconditionally, which silently let local clobber a
+    // genuine same-record edit from another device with zero warning --
+    // caught via a live two-device-same-transaction test, worse than the
+    // original discard+alert since it lost data with no trace at all. Now:
+    // per record, compare the server's fresh copy against what this tab
+    // last knew (`lastSynced`) -- if the server's copy is unchanged from
+    // that, it's safe to overlay this tab's edit; if the server's copy
+    // ALSO differs from `lastSynced`, that's a genuine conflict on that
+    // specific record, so the server's version wins for it and the user is
+    // still told via the alert (while every non-conflicting record still
+    // auto-merges silently).
+    async function attemptSave(payload, isRetry) {
+      const body = JSON.stringify({ ...payload, _rev: revRef.current });
+      const r = await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).catch(() => null);
+      if (!r) return;
+      if (r.status === 409) {
+        const conflict = await r.json().catch(() => null);
+        if (!conflict || !conflict.serverState) return;
+        const { _rev, ...serverRest } = conflict.serverState;
+        let merged = serverRest;
+        let didMerge = false;
+        let hadRealConflict = false;
+        if (!isRetry) {
+          const lastSyncedRaw = localStorage.getItem('simplebudget1_synced');
+          const lastSynced = lastSyncedRaw ? JSON.parse(lastSyncedRaw) : null;
+          if (lastSynced) {
+            const lastSyncedById = new Map((lastSynced.transactions || []).map(t => [t.id, t]));
+            const serverById = new Map((serverRest.transactions || []).map(t => [t.id, t]));
+            const changedLocal = payload.transactions.filter(t => {
+              const prev = lastSyncedById.get(t.id);
+              return !prev || JSON.stringify(prev) !== JSON.stringify(t);
+            });
+            const safeToApply = changedLocal.filter(t => {
+              const prevKnown = lastSyncedById.get(t.id);
+              const serverNow = serverById.get(t.id);
+              const serverAlsoChangedThisRecord = prevKnown
+                ? JSON.stringify(prevKnown) !== JSON.stringify(serverNow)
+                : false; // brand-new local record (e.g. an unsynced ADD) -- nothing on the server to conflict with
+              if (serverAlsoChangedThisRecord) hadRealConflict = true;
+              return !serverAlsoChangedThisRecord;
+            });
+            if (safeToApply.length) {
+              const byId = new Map((serverRest.transactions || []).map(t => [t.id, t]));
+              safeToApply.forEach(t => byId.set(t.id, t));
+              merged = { ...serverRest, transactions: Array.from(byId.values()) };
+              didMerge = true;
+            }
+          }
+        }
+        revRef.current = _rev || 0;
+        justLoadedRef.current = true;
+        dispatch({ type: 'LOAD', state: merged });
+        localStorage.setItem('simplebudget1_synced', JSON.stringify(merged));
+        if (didMerge) {
+          await attemptSave(merged, true);
+        }
+        if (hadRealConflict || !didMerge) {
+          window.alert("Another tab, your phone, or the daily bank import saved changes here since this page last synced" + (hadRealConflict ? ", including an edit to the exact same transaction" : "") + ". Loaded the latest version — please double-check your most recent change on this screen actually went through.");
+        }
+        return;
+      }
+      const result = await r.json().catch(() => null);
+      if (result && result.rev !== undefined) revRef.current = result.rev;
+      localStorage.setItem('simplebudget1_synced', JSON.stringify(payload));
+    }
+
+    function doSave() {
+      if (saveInFlightRef.current) { pendingSaveRef.current = true; return; }
+      saveInFlightRef.current = true;
+      attemptSave(stateRef.current, false)
+        .finally(() => {
+          saveInFlightRef.current = false;
+          if (pendingSaveRef.current) {
+            pendingSaveRef.current = false;
+            doSave();
+          }
+        });
+    }
+    doSave();
   }, [state, serverReady]);
 
   return (

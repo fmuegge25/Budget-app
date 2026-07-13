@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import subprocess
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -52,10 +53,20 @@ def notify(title, message):
     # Native MessageBoxW via ctypes -- no installs, no accounts, stays on
     # top of everything so a failure can't be missed even if you've
     # switched away from the browser window.
-    try:
-        ctypes.windll.user32.MessageBoxW(0, message, title, MB_ICONWARNING | MB_TOPMOST)
-    except Exception:
-        pass
+    #
+    # MessageBoxW blocks the calling thread until dismissed -- calling it
+    # directly here used to freeze the whole scraper (e.g. a reconcile()
+    # mismatch on one account stalled every remaining account until the
+    # popup was clicked). Shown on its own thread instead so the main
+    # script keeps going immediately; the thread is deliberately NOT a
+    # daemon, so the process still won't fully exit until every popup
+    # raised during the run has actually been seen and dismissed.
+    def _show():
+        try:
+            ctypes.windll.user32.MessageBoxW(0, message, title, MB_ICONWARNING | MB_TOPMOST)
+        except Exception:
+            pass
+    threading.Thread(target=_show).start()
 
 
 def import_to_server(account_name, csv_text):

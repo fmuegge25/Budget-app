@@ -99,9 +99,27 @@ def get_state():
 
 @app.route("/api/state", methods=["POST"])
 def save_state():
+    # A browser tab left open for hours (or another device) only ever loads
+    # the server's data once, then blindly re-saves its own full in-memory
+    # copy on every local edit -- with no check at all, that silently
+    # overwrites anything newer that arrived from elsewhere (the daily bank
+    # scraper, another tab, a phone) in the meantime. Confirmed cause of a
+    # real data-loss incident. _rev is a simple monotonic counter: a save is
+    # only accepted if the client's _rev matches what's actually on disk
+    # right now -- i.e. the client's copy is provably not stale. A stale
+    # client gets rejected (409) with the real current data instead of
+    # winning a silent last-write-wins race.
+    body = request.json
     with STATE_LOCK:
-        STATE_FILE.write_text(json.dumps(request.json))
-    return jsonify({"ok": True})
+        current = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
+        current_rev = (current or {}).get("_rev", 0)
+        client_rev = body.get("_rev", 0) if isinstance(body.get("_rev", 0), int) else 0
+        if current is not None and client_rev != current_rev:
+            return jsonify({"ok": False, "conflict": True, "serverState": current}), 409
+        new_rev = current_rev + 1
+        body["_rev"] = new_rev
+        STATE_FILE.write_text(json.dumps(body))
+    return jsonify({"ok": True, "rev": new_rev})
 
 # ── Bank CSV scrape import ───────────────────────────────────────────────────
 
@@ -137,6 +155,9 @@ def is_placeholder_description(desc):
     # real merchant name posts, e.g. "000000154126".
     return bool(re.fullmatch(r"0*\d+", (desc or "").strip()))
 
+def _shifted(d, days):
+    return (date.fromisoformat(d) + timedelta(days=days)).isoformat()
+
 @app.route("/api/import_csv", methods=["POST"])
 def import_csv():
     body = request.json
@@ -161,26 +182,68 @@ def import_csv():
             if t["accountId"] == account_id:
                 by_date.setdefault(t["date"], []).append(t)
 
+        # How many rows in *this* CSV batch share a given (date, description) --
+        # used below so the "amount finalized" settle only fires when it's
+        # unambiguous which existing transaction a row corresponds to.
+        new_desc_counts = {}
+        for r in rows:
+            new_desc_counts[(r["date"], r["description"])] = new_desc_counts.get((r["date"], r["description"]), 0) + 1
+
+        claimed = set()  # existing transaction ids already matched to a row this run
         added = 0
         updated = 0
         for r in rows:
-            same_day = by_date.get(r["date"], [])
-            # Exact match already present -- true duplicate, skip.
-            if any(t["description"] == r["description"] and t["amount"] == r["amount"] for t in same_day):
+            # Exact match already present -- true duplicate, skip. Checked
+            # across a +/-1 day window (not just the exact date) because a
+            # transaction can show as pending on one day and post the next
+            # with the identical description/amount -- same-day-only used to
+            # miss that shift and double-count it.
+            exact = next(
+                (t for d in (r["date"], _shifted(r["date"], -1), _shifted(r["date"], 1))
+                 for t in by_date.get(d, [])
+                 if t["id"] not in claimed and t["description"] == r["description"] and t["amount"] == r["amount"]),
+                None,
+            )
+            if exact:
+                claimed.add(exact["id"])
                 continue
+
+            same_day = by_date.get(r["date"], [])
+            # Never a settle candidate: something you typed in by hand isn't
+            # a bank placeholder that's "still settling" -- if it happens to
+            # share a date+description with an incoming bank row, the right
+            # answer is to add the bank row as its own transaction (worst
+            # case: a duplicate you notice and merge), never to silently
+            # rewrite the amount/description you actually entered.
+            same_day_unclaimed = [t for t in same_day if t["id"] not in claimed and not t.get("manual")]
+            existing_desc_count = sum(1 for t in same_day_unclaimed if t["description"] == r["description"])
+
             # Same transaction settling: pending placeholder -> real name, or
             # same description with the amount finalized (e.g. a tip added).
-            candidate = next(
-                (t for t in same_day if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])),
-                None,
-            ) or next((t for t in same_day if t["description"] == r["description"] and t["amount"] != r["amount"]), None)
+            # Only trusted when there's exactly one existing same-day
+            # transaction with this description AND exactly one row in this
+            # batch with it too -- otherwise it's ambiguous which one goes
+            # with which (e.g. three separate same-day charges at the same
+            # place), and guessing silently destroyed real transactions
+            # before. When ambiguous, falls through to just adding it as a
+            # new row instead -- a duplicate a human can merge later beats
+            # data quietly vanishing.
+            candidate = None
+            placeholder_candidates = [t for t in same_day_unclaimed if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])]
+            if len(placeholder_candidates) == 1:
+                candidate = placeholder_candidates[0]
+            elif existing_desc_count == 1 and new_desc_counts.get((r["date"], r["description"]), 0) == 1:
+                candidate = next((t for t in same_day_unclaimed if t["description"] == r["description"] and t["amount"] != r["amount"]), None)
+
             if candidate:
                 candidate["description"] = r["description"]
                 candidate["amount"] = r["amount"]
                 if r["memo"]:
                     candidate["memo"] = r["memo"]
+                claimed.add(candidate["id"])
                 updated += 1
                 continue
+
             new_tx = {
                 "id": uuid.uuid4().hex[:8],
                 "date": r["date"],
@@ -192,10 +255,15 @@ def import_csv():
                 "memo": r["memo"],
             }
             data["transactions"].append(new_tx)
-            same_day.append(new_tx)
-            by_date[r["date"]] = same_day
+            by_date.setdefault(r["date"], []).append(new_tx)
+            claimed.add(new_tx["id"])
             added += 1
 
+        # Bump _rev here too (see save_state's comment) -- otherwise a
+        # browser tab that hasn't reloaded since before this import would
+        # still think its stale in-memory copy is current, and a later edit
+        # in that tab would overwrite everything this import just added.
+        data["_rev"] = data.get("_rev", 0) + 1
         STATE_FILE.write_text(json.dumps(data))
 
     return jsonify({"ok": True, "added": added, "updated": updated, "parsed": len(all_rows)})
