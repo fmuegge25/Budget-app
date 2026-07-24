@@ -103,11 +103,25 @@ def do_login(page, creds):
     target = find_login_frame(page)
 
     try:
-        # Confirmed via live DevTools inspection: the Access ID field is
-        # <input id="aid">. Target it directly -- exact and unambiguous,
-        # unlike placeholder/type-based guesses which kept timing out.
-        target.wait_for_selector("#aid", state="visible", timeout=10000)
-        target.locator("#aid").fill(creds["access_id"])
+        # Originally the Access ID field was confirmed via DevTools as
+        # <input id="aid"> inside a cross-origin iframe. Confirmed by live
+        # failure 2026-07-20 that this isn't stable -- the bank now also
+        # shows a login modal directly on the main page (no "apiture"/"seblo"
+        # iframe at all, find_login_frame() falls back to `page` itself in
+        # that case) where #aid didn't match, even though the exact same
+        # "Access ID" placeholder field was visibly right there. Try #aid
+        # first (fast path when the iframe version shows up), fall back to
+        # the placeholder the same way the password field already does.
+        try:
+            target.wait_for_selector("#aid", state="visible", timeout=5000)
+            id_field = target.locator("#aid")
+        except Exception:
+            id_field = target.get_by_placeholder("Access ID").first
+            id_field.wait_for(state="visible", timeout=10000)
+        try:
+            id_field.fill(creds["access_id"])
+        except Exception:
+            id_field.fill(creds["access_id"], force=True)
         # Password field's id wasn't confirmed, so fall back to placeholder
         # matching with .first to dodge any hidden-duplicate ambiguity, and
         # force=True to skip animation-stability checks that may be racing
@@ -147,6 +161,25 @@ def do_login(page, creds):
     input("Press Enter here once you're fully logged in... ")
 
 
+def close_contact_info_prompt(page):
+    # The bank started showing a "please confirm/update your contact info"
+    # interstitial page (confirmed via screenshot 2026-07-17 -- not the usual
+    # ngb-modal-window, a full page with "Update Contact Information"/"My
+    # contact details are correct"/"Remind me later" buttons). First attempt
+    # clicked "Remind me later" (didn't want to assert anything about real
+    # contact info on the user's behalf) -- confirmed BY LIVE TEST that this
+    # is a snooze, not a dismissal: it reappeared on the very next account
+    # switch, and kept blocking navigation account after account. User
+    # confirmed the on-file info (fisher_muegge25@yahoo.com / 5806280971) is
+    # actually correct, so "My contact details are correct" is used instead --
+    # confirmed to actually clear the page for good instead of re-nagging.
+    try:
+        page.locator("text=My contact details are correct").click(timeout=2000)
+        page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+
 def close_stuck_modal(page):
     # If a previous account's download errored out (e.g. expect_download
     # timed out), the bank's Angular modal is often left open -- and it
@@ -155,6 +188,7 @@ def close_stuck_modal(page):
     # cause of FM Feeders / RG Exchange never actually being reached despite
     # Checking succeeding: this modal sat open across account iterations.
     # Defensively clear it before every account, not just after an error.
+    close_contact_info_prompt(page)
     if page.locator("ngb-modal-window").count() == 0:
         return
     try:
@@ -179,8 +213,19 @@ def download_csv(page, bank_account_name):
     # Always go through the "Accounts" nav dropdown to reach the specific
     # account -- needed every time, since after finishing one account in a
     # multi-account run we're still sitting on that account's Activity page.
-    page.click("nav >> text=Accounts")
+    # The contact-info interstitial (see close_contact_info_prompt) can
+    # still be mid-render at the moment close_stuck_modal() ran above and
+    # only actually cover the nav a beat later -- confirmed live: the very
+    # first account's "Accounts" click timed out the full 30s this way even
+    # though close_stuck_modal() had already run. Retries once, dismissing
+    # again in between, instead of trusting a single upfront check.
+    try:
+        page.click("nav >> text=Accounts", timeout=8000)
+    except Exception:
+        close_contact_info_prompt(page)
+        page.click("nav >> text=Accounts", timeout=15000)
     page.wait_for_timeout(800)
+    close_contact_info_prompt(page)
     # Scope to the open dropdown panel specifically -- a short name like
     # "Savings" can match a hidden duplicate elsewhere on the page, which
     # Playwright would otherwise try (and fail) to click.

@@ -42,6 +42,39 @@ STATE_LOCK = threading.Lock()
 # imports going forward; nothing already in the budget is affected.
 IMPORT_CUTOFF_DATE = "2026-07-01"
 
+# ── Access key (protects the public cloud host) ───────────────────────────────
+# When this app is served from a public URL (e.g. PythonAnywhere) instead of
+# only localhost + the private tailnet, /api/* would otherwise be world-
+# readable/writable -- anyone who found the URL could read every account
+# balance and transaction, or overwrite them. So every /api/ request must
+# carry a matching secret key (header X-Budget-Key, or ?key= for the very
+# first page load). The key comes from the BUDGET_ACCESS_KEY env var or a
+# server_key.txt file sitting next to this script. If NEITHER is set (the
+# local/Tailscale setup), auth stays OFF and behavior is exactly as before --
+# so this change can't break the existing local server.
+def _load_access_key():
+    env = os.environ.get("BUDGET_ACCESS_KEY", "").strip()
+    if env:
+        return env
+    key_file = ROOT / "server_key.txt"
+    if key_file.exists():
+        return key_file.read_text().strip()
+    return ""
+
+ACCESS_KEY = _load_access_key()
+
+@app.before_request
+def _require_access_key():
+    if not ACCESS_KEY:
+        return  # no key configured (localhost) -- open, same as before
+    if request.method == "OPTIONS":
+        return  # let CORS preflight through untouched
+    if not request.path.startswith("/api/"):
+        return  # the app shell + static assets aren't sensitive
+    provided = request.headers.get("X-Budget-Key") or request.args.get("key", "")
+    if provided != ACCESS_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def load_config():
@@ -189,6 +222,10 @@ def import_csv():
         for r in rows:
             new_desc_counts[(r["date"], r["description"])] = new_desc_counts.get((r["date"], r["description"]), 0) + 1
 
+        def _is_prefix_pair(a, b):
+            a, b = a.strip().lower(), b.strip().lower()
+            return a.startswith(b) or b.startswith(a)
+
         claimed = set()  # existing transaction ids already matched to a row this run
         added = 0
         updated = 0
@@ -198,10 +235,31 @@ def import_csv():
             # transaction can show as pending on one day and post the next
             # with the identical description/amount -- same-day-only used to
             # miss that shift and double-count it.
+            # Also matches on group=="Transfer" alone (ignoring description):
+            # merging two raw imports into a linked Transfer pair rewrites
+            # their description to "Transfer to/from X", so a description+
+            # amount match would never find them again once merged -- and
+            # since the bank's CSV export keeps showing that same historical
+            # row for weeks, it would otherwise get reimported as a fresh
+            # "new" duplicate on every later run.
+            # Same-day + same-amount + one description a prefix of the other
+            # also counts as a match (but only on the exact date, not the
+            # +/-1 shifted days -- coincidental same-amount purchases on
+            # different days shouldn't get merged just because their
+            # descriptions happen to share a prefix). Confirmed real bug:
+            # the bank's own CSV export truncates a merchant description
+            # differently between two exports of the same day, so a plain
+            # description+amount match silently re-added every 07/10 and
+            # 07/13 transaction a second time.
             exact = next(
                 (t for d in (r["date"], _shifted(r["date"], -1), _shifted(r["date"], 1))
                  for t in by_date.get(d, [])
-                 if t["id"] not in claimed and t["description"] == r["description"] and t["amount"] == r["amount"]),
+                 if t["id"] not in claimed and t["amount"] == r["amount"]
+                 and (
+                     t["description"] == r["description"]
+                     or t.get("group") == "Transfer"
+                     or (d == r["date"] and _is_prefix_pair(t["description"], r["description"]))
+                 )),
                 None,
             )
             if exact:
@@ -229,6 +287,15 @@ def import_csv():
             # new row instead -- a duplicate a human can merge later beats
             # data quietly vanishing.
             candidate = None
+            # Tried widening this to a multi-day placeholder lookback (a
+            # placeholder can in principle sit for more than one day before
+            # the real name posts) but real data proved it unsafe: of 5
+            # same-amount placeholder/named pairs found 2+ days apart, only
+            # 1 was an actual duplicate -- the other 4 were coincidentally
+            # identical amounts on unrelated real transactions. Same-day-only
+            # stays the rule; a slower-settling placeholder just becomes a
+            # duplicate a human notices and merges, which beats silently
+            # deleting a real transaction that happens to share an amount.
             placeholder_candidates = [t for t in same_day_unclaimed if is_placeholder_description(t["description"]) and not is_placeholder_description(r["description"])]
             if len(placeholder_candidates) == 1:
                 candidate = placeholder_candidates[0]

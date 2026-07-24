@@ -150,7 +150,7 @@ function sampleData() {
     { id: uid(), name: 'FM Feeders', startingBalance: 442.36 },
     { id: uid(), name: 'Credit Card', startingBalance: 0 },
   ];
-  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [], rules: [], balanceOverrides: {} };
+  return { accounts, categories, transactions: [], budgetMonths: {}, carryOverrides: {}, debts: [], rules: [], balanceOverrides: {}, dismissedDuplicates: [] };
 }
 
 // Auto-categorize rules: description contains `match` (case-insensitive) ->
@@ -368,6 +368,11 @@ function reducer(state, action) {
     }
     case 'DELETE_RULE':
       return { ...state, rules: (state.rules || []).filter(r => r.id !== action.id) };
+    // User looked at a flagged possible-duplicate pair and confirmed it's
+    // actually two separate transactions -- remembers the pair by id so
+    // findDuplicateCandidates() stops re-flagging it every time the view opens.
+    case 'DISMISS_DUPLICATE':
+      return { ...state, dismissedDuplicates: [...(state.dismissedDuplicates || []), action.key] };
     case 'LOAD':
       return migrateDebts({ debts: [], ...action.state });
     case 'ADD_DEBT': {
@@ -402,7 +407,7 @@ function migrateDebts(state) {
     if (!cat) { cat = { id: uid(), group: 'Debts', name: d.name }; categories.push(cat); }
     return { ...d, categoryId: cat.id };
   });
-  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {}, rules: state.rules || [], balanceOverrides: state.balanceOverrides || {} };
+  return { ...state, categories, debts: migrated, carryOverrides: state.carryOverrides || {}, rules: state.rules || [], balanceOverrides: state.balanceOverrides || {}, dismissedDuplicates: state.dismissedDuplicates || [] };
 }
 
 function loadInitial() {
@@ -506,6 +511,60 @@ function countUncategorized(state) {
 // needsCategorizing() only -- an already-linked or already-categorized
 // transaction is left alone, so this only ever offers to merge things that
 // haven't been touched yet, never something the user already decided on.
+// A pending bank transaction often shows first as a raw reference number
+// (e.g. "000000579601") before the real merchant name posts -- same test
+// server.py's import_csv uses server-side to auto-settle same-day imports.
+function isPlaceholderDescription(desc) {
+  return /^0*\d+$/.test((desc || '').trim());
+}
+function isPrefixPair(a, b) {
+  a = (a || '').trim().toLowerCase();
+  b = (b || '').trim().toLowerCase();
+  if (!a || !b) return false;
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+// Surfaces likely duplicate transactions for a human to confirm -- this is
+// deliberately a suggestion queue, not an auto-merge. server.py's importer
+// already auto-settles the safe, same-day case (pending placeholder -> real
+// name). This catches the riskier case it intentionally leaves alone: a
+// pending row's date can differ from the real transaction's actual posted
+// date by several days (that bank shows pending rows under "today", then
+// backdates to the true transaction date once it posts), and widening the
+// *automatic* import-time match to bridge that gap was tried and reverted
+// (see server.py's import_csv comment -- 4 of 5 same-amount pairs found 2+
+// days apart turned out to be coincidental, unrelated transactions). Putting
+// it in front of a human instead of auto-merging makes that same widened
+// window safe: a false positive here just gets "Not a duplicate" clicked.
+function findDuplicateCandidates(state) {
+  const dismissed = new Set(state.dismissedDuplicates || []);
+  const byAccount = {};
+  for (const t of state.transactions) {
+    if (t.linkId) continue; // transfer legs are already a confirmed pair
+    (byAccount[t.accountId] = byAccount[t.accountId] || []).push(t);
+  }
+  const pairs = [];
+  for (const accId of Object.keys(byAccount)) {
+    const txns = byAccount[accId];
+    for (let i = 0; i < txns.length; i++) {
+      for (let j = i + 1; j < txns.length; j++) {
+        const a = txns[i], b = txns[j];
+        if (a.amount !== b.amount) continue;
+        const key = [a.id, b.id].sort().join('|');
+        if (dismissed.has(key)) continue;
+        const daysApart = Math.abs((new Date(a.date) - new Date(b.date)) / 86400000);
+        const aPlaceholder = isPlaceholderDescription(a.description);
+        const bPlaceholder = isPlaceholderDescription(b.description);
+        const placeholderSettle = aPlaceholder !== bPlaceholder && daysApart <= 7;
+        const nearExact = !placeholderSettle && daysApart <= 2
+          && (a.description === b.description || isPrefixPair(a.description, b.description));
+        if (placeholderSettle || nearExact) pairs.push({ key, a, b });
+      }
+    }
+  }
+  return pairs.sort((p, q) => q.a.date.localeCompare(p.a.date));
+}
+
 function findTransferCandidates(state) {
   const pool = state.transactions.filter(t => !t.linkId && needsCategorizing(t));
   const used = new Set();
@@ -560,6 +619,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
   const { state, dispatch } = useContext(BudgetContext);
   const rta = readyToAssign(state, monthKey);
   const uncategorizedCount = countUncategorized(state);
+  const duplicateCount = findDuplicateCandidates(state).length;
   const [newAccName, setNewAccName] = useState('');
   const [newAccBal, setNewAccBal] = useState('');
 
@@ -618,6 +678,15 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
           <span>Needs Categorizing</span>
           {uncategorizedCount > 0 && (
             <span className="bg-orange-500 text-white text-xs rounded-full px-2 py-0.5">{uncategorizedCount}</span>
+          )}
+        </button>
+        <button
+          onClick={() => setView({ type: 'duplicates' })}
+          className={`text-left px-4 py-2 font-medium flex items-center gap-2 whitespace-nowrap ${view.type === 'duplicates' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+        >
+          <span>Possible Duplicates</span>
+          {duplicateCount > 0 && (
+            <span className="bg-amber-500 text-white text-xs rounded-full px-2 py-0.5">{duplicateCount}</span>
           )}
         </button>
         <button
@@ -934,6 +1003,43 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
 
 const BANK_SERVER = ''; // relative — same origin the app was loaded from (works over Tailscale too)
 
+// When the app is hosted on a public URL (e.g. PythonAnywhere), the server
+// requires a secret key on every /api/ call. Stored once per device in
+// localStorage. First time on a new device, supply it via a ?key=... URL:
+// the key is saved and then stripped from the address bar. On localhost the
+// server has no key configured, so this header is simply ignored and nothing
+// changes. apiFetch() attaches the header and, on a 401, prompts for the key.
+function getAccessKey() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('key');
+    if (fromUrl) {
+      localStorage.setItem('simplebudget_key', fromUrl.trim());
+      params.delete('key');
+      const clean = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+      window.history.replaceState({}, '', clean);
+      return fromUrl.trim();
+    }
+  } catch (e) {}
+  return localStorage.getItem('simplebudget_key') || '';
+}
+
+function apiFetch(url, opts = {}) {
+  const key = getAccessKey();
+  const headers = Object.assign({}, opts.headers || {});
+  if (key) headers['X-Budget-Key'] = key;
+  return fetch(url, Object.assign({}, opts, { headers })).then(r => {
+    if (r.status === 401) {
+      const entered = window.prompt('This budget is protected. Enter your access key:');
+      if (entered) {
+        localStorage.setItem('simplebudget_key', entered.trim());
+        location.reload();
+      }
+    }
+    return r;
+  });
+}
+
 function PlaidSetupModal({ onClose }) {
   const [clientId, setClientId] = useState('');
   const [secret, setSecret] = useState('');
@@ -943,7 +1049,7 @@ function PlaidSetupModal({ onClose }) {
   async function save() {
     setSaving(true);
     try {
-      await fetch(`${BANK_SERVER}/api/configure`, {
+      await apiFetch(`${BANK_SERVER}/api/configure`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: clientId, secret, plaid_env: env }),
@@ -996,17 +1102,17 @@ function BankSyncBar({ account }) {
   const [syncing, setSyncing] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
 
-  const checkStatus = () => fetch(`${BANK_SERVER}/api/status`).then(r => r.json()).then(setStatus).catch(() => setStatus(null));
+  const checkStatus = () => apiFetch(`${BANK_SERVER}/api/status`).then(r => r.json()).then(setStatus).catch(() => setStatus(null));
   useEffect(() => { checkStatus(); }, []);
 
   async function connect() {
     try {
-      const res = await fetch(`${BANK_SERVER}/api/create_link_token`, { method: 'POST' }).then(r => r.json());
+      const res = await apiFetch(`${BANK_SERVER}/api/create_link_token`, { method: 'POST' }).then(r => r.json());
       if (res.error) return alert(res.error);
       const handler = Plaid.create({
         token: res.link_token,
         onSuccess: async (public_token) => {
-          await fetch(`${BANK_SERVER}/api/exchange_token`, {
+          await apiFetch(`${BANK_SERVER}/api/exchange_token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ public_token, account_name: account.name }),
@@ -1024,7 +1130,7 @@ function BankSyncBar({ account }) {
   async function sync() {
     setSyncing(true);
     try {
-      const res = await fetch(`${BANK_SERVER}/api/sync_transactions`, {
+      const res = await apiFetch(`${BANK_SERVER}/api/sync_transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_name: account.name }),
@@ -1041,7 +1147,7 @@ function BankSyncBar({ account }) {
 
   async function disconnect() {
     if (!window.confirm(`Disconnect bank from "${account.name}"?`)) return;
-    await fetch(`${BANK_SERVER}/api/disconnect`, {
+    await apiFetch(`${BANK_SERVER}/api/disconnect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ account_name: account.name }),
@@ -1398,6 +1504,68 @@ function TransferMatchCard({ outTx, inTx }) {
       >
         Merge into Transfer
       </button>
+    </div>
+  );
+}
+
+function DuplicateMatchCard({ pair }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const { key, a, b } = pair;
+  const accName = (id) => (state.accounts.find(acc => acc.id === id) || {}).name || '—';
+  const label = (t) => {
+    if (!t.group) return 'Needs categorizing';
+    if (t.group === 'Deposits' || t.group === 'Transfer') return t.group;
+    const c = state.categories.find(c => c.id === t.categoryId);
+    return c ? `${t.group} / ${c.name}` : t.group;
+  };
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
+      <div className="font-semibold text-gray-800 mb-1.5 text-[13px]">
+        Possible duplicate — both {fmt(a.amount)} in {accName(a.accountId)}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+        {[a, b].map(t => (
+          <div key={t.id} className="bg-white border rounded px-2 py-1.5 text-[12px] min-w-0">
+            <div className="text-gray-700 truncate">{t.date} — {t.description || '(no description)'}</div>
+            <div className="text-gray-400">{label(t)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          className="px-2.5 py-1 bg-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700"
+          onClick={() => dispatch({ type: 'DELETE_TRANSACTION', id: b.id })}
+        >
+          Keep {a.date} entry, delete the other
+        </button>
+        <button
+          className="px-2.5 py-1 bg-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700"
+          onClick={() => dispatch({ type: 'DELETE_TRANSACTION', id: a.id })}
+        >
+          Keep {b.date} entry, delete the other
+        </button>
+        <button
+          className="px-2.5 py-1 bg-white border text-gray-600 rounded text-xs font-medium hover:bg-gray-50"
+          onClick={() => dispatch({ type: 'DISMISS_DUPLICATE', key })}
+        >
+          Not a duplicate
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DuplicatesView() {
+  const { state } = useContext(BudgetContext);
+  const pairs = findDuplicateCandidates(state);
+  return (
+    <div className="p-3 md:p-4">
+      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Possible Duplicates</h2>
+      <p className="text-xs text-gray-500 mb-2.5">Same amount, same account, close together in time — usually a pending bank charge that later posted a second time under its real name/date.</p>
+      {pairs.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">No possible duplicates found.</div>
+      ) : pairs.map(p => <DuplicateMatchCard key={p.key} pair={p} />)}
     </div>
   );
 }
@@ -1931,7 +2099,7 @@ function App() {
 
   useEffect(() => {
     const syncedRaw = localStorage.getItem('simplebudget1_synced');
-    fetch('/api/state')
+    apiFetch('/api/state')
       .then(r => r.json())
       .then(serverState => {
         if (!serverState) return;
@@ -1998,7 +2166,7 @@ function App() {
     // auto-merges silently).
     async function attemptSave(payload, isRetry) {
       const body = JSON.stringify({ ...payload, _rev: revRef.current });
-      const r = await fetch('/api/state', {
+      const r = await apiFetch('/api/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -2081,6 +2249,7 @@ function App() {
           {view.type === 'debts' && <DebtsView />}
           {view.type === 'reports' && <ReportsView monthKey={monthKey} />}
           {view.type === 'categorize' && <CategorizeView />}
+          {view.type === 'duplicates' && <DuplicatesView />}
           {view.type === 'manage-categories' && <ManageCategoriesView />}
         </div>
       </div>

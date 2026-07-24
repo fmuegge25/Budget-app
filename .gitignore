@@ -8,3 +8,9 @@ bank_browser_profile/
 cfcu_browser_profile/
 last_bank_export.csv
 __pycache__/
+diag_checking.csv
+cloud_config.json
+server_key.txt
+budget_data.pre_*.json
+bank_scraper*.png
+diag_checking_balance.py

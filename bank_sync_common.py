@@ -17,10 +17,38 @@ import time
 import urllib.request
 from pathlib import Path
 
-SERVER = "http://localhost:5112"
-SERVER_PORT = 5112
 ROOT = Path(__file__).parent
 PYTHONW = ROOT.parent / "py314" / "pythonw.exe"
+
+# Where the scraper posts imports / reads balances. Defaults to the local
+# server, but once the app is hosted in the cloud (PythonAnywhere), create
+# cloud_config.json next to this file:
+#     {"cloud_url": "https://YOURNAME.pythonanywhere.com",
+#      "access_key": "..."}
+# and the scraper will post there instead (with the key header), so the
+# daily import lands in the same shared data the phone reads. If the file is
+# absent, everything stays pointed at localhost exactly as before.
+def _load_cloud_config():
+    cfg_file = ROOT / "cloud_config.json"
+    if cfg_file.exists():
+        try:
+            return json.loads(cfg_file.read_text())
+        except Exception:
+            pass
+    return {}
+
+_CLOUD = _load_cloud_config()
+SERVER = (_CLOUD.get("cloud_url") or "http://localhost:5112").rstrip("/")
+ACCESS_KEY = _CLOUD.get("access_key", "")
+SERVER_PORT = 5112
+USING_CLOUD = bool(_CLOUD.get("cloud_url"))
+
+
+def _auth_headers(extra=None):
+    headers = dict(extra or {})
+    if ACCESS_KEY:
+        headers["X-Budget-Key"] = ACCESS_KEY
+    return headers
 
 MB_ICONWARNING = 0x30
 MB_TOPMOST = 0x40000
@@ -32,6 +60,8 @@ def ensure_server_running():
     it -- that trigger has been unreliable (doesn't fire on sleep/wake, only
     a real logon event) -- so each scraper brings the server up itself,
     same as the desktop launcher does."""
+    if USING_CLOUD:
+        return  # cloud host is already running; nothing to start locally
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1)
         if s.connect_ex(("127.0.0.1", SERVER_PORT)) == 0:
@@ -73,7 +103,7 @@ def import_to_server(account_name, csv_text):
     body = json.dumps({"account_name": account_name, "csv_text": csv_text}).encode()
     req = urllib.request.Request(
         f"{SERVER}/api/import_csv", data=body,
-        headers={"Content-Type": "application/json"}, method="POST",
+        headers=_auth_headers({"Content-Type": "application/json"}), method="POST",
     )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read().decode())
@@ -95,14 +125,31 @@ def latest_balance_from_csv(csv_text):
 
 
 def app_balance(account_name):
-    with urllib.request.urlopen(f"{SERVER}/api/state") as resp:
+    req = urllib.request.Request(f"{SERVER}/api/state", headers=_auth_headers())
+    with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode())
     account = next((a for a in data["accounts"] if a["name"] == account_name), None)
     if not account:
         return None
-    total = account["startingBalance"] + sum(
-        t["amount"] for t in data["transactions"] if t["accountId"] == account["id"]
-    )
+    # Mirrors index.html's accountBalance(): a dated SET_BALANCE_OVERRIDE
+    # replaces startingBalance as the base and only transactions strictly
+    # after that date still count -- ignoring overrides here silently
+    # compared the bank's real balance against the wrong number for every
+    # account that's ever had one set (confirmed: this was stale since the
+    # override feature shipped 2026-07-11, every "MISMATCH" popup since then
+    # was measuring the wrong thing).
+    overrides = data.get("balanceOverrides", {}).get(account["id"], {})
+    if overrides:
+        latest_date = max(overrides.keys())
+        base = overrides[latest_date]
+        total = base + sum(
+            t["amount"] for t in data["transactions"]
+            if t["accountId"] == account["id"] and t["date"] > latest_date
+        )
+    else:
+        total = account["startingBalance"] + sum(
+            t["amount"] for t in data["transactions"] if t["accountId"] == account["id"]
+        )
     return total
 
 
