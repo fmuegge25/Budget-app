@@ -15,7 +15,7 @@ import uuid
 from datetime import date, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 import requests as http
 
@@ -44,14 +44,19 @@ IMPORT_CUTOFF_DATE = "2026-07-01"
 
 # ── Access key (protects the public cloud host) ───────────────────────────────
 # When this app is served from a public URL (e.g. PythonAnywhere) instead of
-# only localhost + the private tailnet, /api/* would otherwise be world-
-# readable/writable -- anyone who found the URL could read every account
-# balance and transaction, or overwrite them. So every /api/ request must
-# carry a matching secret key (header X-Budget-Key, or ?key= for the very
-# first page load). The key comes from the BUDGET_ACCESS_KEY env var or a
-# server_key.txt file sitting next to this script. If NEITHER is set (the
-# local/Tailscale setup), auth stays OFF and behavior is exactly as before --
-# so this change can't break the existing local server.
+# only localhost + the private tailnet, the whole site would otherwise be
+# world-readable/writable -- anyone who found the URL could read every
+# account balance and transaction, or overwrite them. So every request must
+# pass standard HTTP Basic Auth (username BASIC_AUTH_USER, password the
+# secret key). Real Basic Auth (not a custom header/URL param) so the browser
+# itself shows the native login prompt on first page load and can offer to
+# save it to the OS credential store -- a custom scheme only lived in page
+# localStorage, which iOS gives a separate copy to standalone "Add to Home
+# Screen" apps, causing repeat prompts there. The key comes from the
+# BUDGET_ACCESS_KEY env var or a server_key.txt file sitting next to this
+# script. If NEITHER is set (the local/Tailscale setup), auth stays OFF and
+# behavior is exactly as before -- so this change can't break the existing
+# local server.
 def _load_access_key():
     env = os.environ.get("BUDGET_ACCESS_KEY", "").strip()
     if env:
@@ -62,6 +67,7 @@ def _load_access_key():
     return ""
 
 ACCESS_KEY = _load_access_key()
+BASIC_AUTH_USER = "budget"
 
 @app.before_request
 def _require_access_key():
@@ -69,11 +75,12 @@ def _require_access_key():
         return  # no key configured (localhost) -- open, same as before
     if request.method == "OPTIONS":
         return  # let CORS preflight through untouched
-    if not request.path.startswith("/api/"):
-        return  # the app shell + static assets aren't sensitive
-    provided = request.headers.get("X-Budget-Key") or request.args.get("key", "")
-    if provided != ACCESS_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    auth = request.authorization
+    if not auth or auth.username != BASIC_AUTH_USER or auth.password != ACCESS_KEY:
+        return Response(
+            "Access key required", 401,
+            {"WWW-Authenticate": 'Basic realm="Simple Budget"'},
+        )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

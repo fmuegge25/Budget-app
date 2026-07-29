@@ -1004,37 +1004,14 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
 const BANK_SERVER = ''; // relative — same origin the app was loaded from (works over Tailscale too)
 
 // When the app is hosted on a public URL (e.g. PythonAnywhere), the server
-// requires a secret key on every /api/ call. Stored once per device in
-// localStorage. First time on a new device, supply it via a ?key=... URL:
-// the key is saved and then stripped from the address bar. On localhost the
-// server has no key configured, so this header is simply ignored and nothing
-// changes. apiFetch() attaches the header and, on a 401, prompts for the key.
-function getAccessKey() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const fromUrl = params.get('key');
-    if (fromUrl) {
-      localStorage.setItem('simplebudget_key', fromUrl.trim());
-      params.delete('key');
-      const clean = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-      window.history.replaceState({}, '', clean);
-      return fromUrl.trim();
-    }
-  } catch (e) {}
-  return localStorage.getItem('simplebudget_key') || '';
-}
-
+// requires standard HTTP Basic Auth on every request -- the browser itself
+// shows the native login prompt and handles credential storage/resend, so
+// no app-side key handling is needed. On localhost the server has no key
+// configured, so the browser never gets a 401 and this never triggers.
 function apiFetch(url, opts = {}) {
-  const key = getAccessKey();
-  const headers = Object.assign({}, opts.headers || {});
-  if (key) headers['X-Budget-Key'] = key;
-  return fetch(url, Object.assign({}, opts, { headers })).then(r => {
+  return fetch(url, opts).then(r => {
     if (r.status === 401) {
-      const entered = window.prompt('This budget is protected. Enter your access key:');
-      if (entered) {
-        localStorage.setItem('simplebudget_key', entered.trim());
-        location.reload();
-      }
+      alert('Access key needed -- reload the page and enter it when prompted.');
     }
     return r;
   });

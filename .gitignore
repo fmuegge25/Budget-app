@@ -14,3 +14,7 @@ server_key.txt
 budget_data.pre_*.json
 bank_scraper*.png
 diag_checking_balance.py
+pa_browser_profile/
+amazon_profile_1/
+amazon_profile_2/
+scraper_run.log
