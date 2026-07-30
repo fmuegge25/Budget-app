@@ -1003,15 +1003,42 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
 
 const BANK_SERVER = ''; // relative — same origin the app was loaded from (works over Tailscale too)
 
-// When the app is hosted on a public URL (e.g. PythonAnywhere), the server
-// requires standard HTTP Basic Auth on every request -- the browser itself
-// shows the native login prompt and handles credential storage/resend, so
-// no app-side key handling is needed. On localhost the server has no key
-// configured, so the browser never gets a 401 and this never triggers.
+// When the app is hosted on a public URL (e.g. PythonAnywhere), /api/ calls
+// need the secret key. Stored once per device in localStorage. First time on
+// a new device, supply it via a ?key=... URL: it's saved then stripped from
+// the address bar. If that's not available (e.g. a standalone iOS "Add to
+// Home Screen" app whose storage doesn't carry over from Safari), a 401
+// triggers an in-app window.prompt() instead -- this only depends on the
+// app's own JS running, never on iOS's native Basic Auth dialog actually
+// firing, so there's always a way back in even when the OS-level prompt
+// doesn't cooperate. On localhost the server has no key configured, so this
+// header is simply ignored and nothing changes.
+function getAccessKey() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('key');
+    if (fromUrl) {
+      localStorage.setItem('simplebudget_key', fromUrl.trim());
+      params.delete('key');
+      const clean = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+      window.history.replaceState({}, '', clean);
+      return fromUrl.trim();
+    }
+  } catch (e) {}
+  return localStorage.getItem('simplebudget_key') || '';
+}
+
 function apiFetch(url, opts = {}) {
-  return fetch(url, opts).then(r => {
+  const key = getAccessKey();
+  const headers = Object.assign({}, opts.headers || {});
+  if (key) headers['X-Budget-Key'] = key;
+  return fetch(url, Object.assign({}, opts, { headers })).then(r => {
     if (r.status === 401) {
-      alert('Access key needed -- reload the page and enter it when prompted.');
+      const entered = window.prompt('This budget is protected. Enter your access key:');
+      if (entered) {
+        localStorage.setItem('simplebudget_key', entered.trim());
+        location.reload();
+      }
     }
     return r;
   });

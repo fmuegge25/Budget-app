@@ -44,19 +44,27 @@ IMPORT_CUTOFF_DATE = "2026-07-01"
 
 # ── Access key (protects the public cloud host) ───────────────────────────────
 # When this app is served from a public URL (e.g. PythonAnywhere) instead of
-# only localhost + the private tailnet, the whole site would otherwise be
-# world-readable/writable -- anyone who found the URL could read every
-# account balance and transaction, or overwrite them. So every request must
-# pass standard HTTP Basic Auth (username BASIC_AUTH_USER, password the
-# secret key). Real Basic Auth (not a custom header/URL param) so the browser
-# itself shows the native login prompt on first page load and can offer to
-# save it to the OS credential store -- a custom scheme only lived in page
-# localStorage, which iOS gives a separate copy to standalone "Add to Home
-# Screen" apps, causing repeat prompts there. The key comes from the
-# BUDGET_ACCESS_KEY env var or a server_key.txt file sitting next to this
-# script. If NEITHER is set (the local/Tailscale setup), auth stays OFF and
-# behavior is exactly as before -- so this change can't break the existing
-# local server.
+# only localhost + the private tailnet, /api/* would otherwise be world-
+# readable/writable -- anyone who found the URL could read every account
+# balance and transaction, or overwrite them. So every /api/ request must
+# carry the secret key, either as real HTTP Basic Auth (works fine in a
+# plain Safari tab, and iOS *can* offer to save it there) or the app's own
+# X-Budget-Key header / ?key= param (index.html always falls back to this
+# via an in-app prompt).
+#
+# The app shell itself ("/", manifest.json, sw.js, icons) is deliberately
+# left UNGATED. An earlier version gated the whole site with Basic Auth only
+# -- but on iOS, a standalone "Add to Home Screen" app that doesn't have
+# cached credentials just fails to load the page at all when the native
+# auth challenge doesn't fire (or gets missed/cancelled), with literally no
+# JS running and thus no way to type the key back in. Leaving the shell open
+# guarantees the page always loads, so the in-app prompt is always reachable
+# as a fallback -- this matters more than fully solving the "ask once ever"
+# problem, which iOS's storage isolation may not allow anyway.
+#
+# The key comes from the BUDGET_ACCESS_KEY env var or a server_key.txt file
+# sitting next to this script. If NEITHER is set (the local/Tailscale
+# setup), auth stays OFF and behavior is exactly as before.
 def _load_access_key():
     env = os.environ.get("BUDGET_ACCESS_KEY", "").strip()
     if env:
@@ -75,12 +83,18 @@ def _require_access_key():
         return  # no key configured (localhost) -- open, same as before
     if request.method == "OPTIONS":
         return  # let CORS preflight through untouched
+    if not request.path.startswith("/api/"):
+        return  # app shell + static assets always load, see comment above
     auth = request.authorization
-    if not auth or auth.username != BASIC_AUTH_USER or auth.password != ACCESS_KEY:
-        return Response(
-            "Access key required", 401,
-            {"WWW-Authenticate": 'Basic realm="Simple Budget"'},
-        )
+    if auth and auth.username == BASIC_AUTH_USER and auth.password == ACCESS_KEY:
+        return
+    provided = request.headers.get("X-Budget-Key") or request.args.get("key", "")
+    if provided == ACCESS_KEY:
+        return
+    return Response(
+        "Access key required", 401,
+        {"WWW-Authenticate": 'Basic realm="Simple Budget"'},
+    )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
