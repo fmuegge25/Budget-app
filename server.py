@@ -75,7 +75,7 @@ def _load_access_key():
     return ""
 
 ACCESS_KEY = _load_access_key()
-BASIC_AUTH_USER = "budget"
+BASIC_AUTH_USER = "play"
 
 @app.before_request
 def _require_access_key():

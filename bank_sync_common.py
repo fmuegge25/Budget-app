@@ -48,7 +48,7 @@ USING_CLOUD = bool(_CLOUD.get("cloud_url"))
 def _auth_headers(extra=None):
     headers = dict(extra or {})
     if ACCESS_KEY:
-        token = base64.b64encode(f"budget:{ACCESS_KEY}".encode()).decode()
+        token = base64.b64encode(f"play:{ACCESS_KEY}".encode()).decode()
         headers["Authorization"] = f"Basic {token}"
     return headers
 
