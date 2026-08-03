@@ -505,6 +505,40 @@ function countUncategorized(state) {
   return state.transactions.filter(needsCategorizing).length;
 }
 
+// Strips off the first token that contains a digit (bank exports append a
+// random transaction/reference code after the merchant name, e.g. "AMAZON
+// MARK* T4KW98RJ2" or "WM SUPERCENTER 4821 ENID OK") so repeat purchases
+// from the same merchant collapse to the same key even though no two raw
+// descriptions are byte-identical. Falls back to the full description when
+// there's no digit anywhere (e.g. "SQ *D.O.G."), so it still works as a key,
+// just a more specific one.
+function normalizeMerchant(description) {
+  const words = (description || '').trim().split(/\s+/);
+  const out = [];
+  for (const w of words) {
+    if (/\d/.test(w)) break;
+    out.push(w);
+  }
+  const key = out.join(' ').trim();
+  return key || (description || '').trim();
+}
+
+// Looks for the most recent already-categorized transaction from the same
+// merchant (by normalizeMerchant) and suggests whatever category it got --
+// this is what lets most of the "needs categorizing" queue clear in one tap
+// instead of a manual Group+Category pick per row.
+function suggestCategoryFor(state, t) {
+  const key = normalizeMerchant(t.description).toLowerCase();
+  if (!key) return null;
+  const matches = state.transactions
+    .filter(o => o.id !== t.id && o.categoryId && normalizeMerchant(o.description).toLowerCase() === key)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (!matches.length) return null;
+  const cat = state.categories.find(c => c.id === matches[0].categoryId);
+  if (!cat) return null;
+  return { group: matches[0].group, categoryId: cat.id, categoryName: cat.name };
+}
+
 // Finds likely-transfer pairs sitting in the uncategorized queue: same
 // amount, opposite sign, different accounts, posted within a couple days of
 // each other (bank-to-bank posting isn't always same-day). Scoped to
@@ -1338,152 +1372,102 @@ function RegisterView({ accountId }) {
 
 const CATEGORIZABLE_GROUPS = [...GROUPS, 'Deposits'];
 
-function GroupCategoryPicker({ t }) {
+// One-at-a-time review card for the "Needs Categorizing" queue (replaced a
+// dropdown-per-row table/card list, added 2026-08-02 -- user said having 55
+// uncategorized rows visible at once was stressful enough that they'd just
+// avoid opening the app). Leans on suggestCategoryFor() for a one-tap
+// confirm on repeat merchants, and on the existing ADD_RULE reducer case
+// (which already sweeps every matching uncategorized transaction, not just
+// this one) for the "Always do this" checkbox -- so confirming one Amazon
+// purchase can clear every other pending Amazon transaction in the same tap
+// instead of requiring one dropdown pick each.
+function ReviewCard({ t, onSkip, wasSkipped }) {
   const { state, dispatch } = useContext(BudgetContext);
-  const [group, setGroup] = useState(
-    CATEGORIZABLE_GROUPS.includes(t.group) ? t.group : (t.amount > 0 ? 'Deposits' : 'Needs')
-  );
-  const [categoryId, setCategoryId] = useState(t.categoryId || '');
+  const accName = (state.accounts.find(a => a.id === t.accountId) || {}).name || '—';
+  const suggestion = useMemo(() => suggestCategoryFor(state, t), [state, t]);
+  const [manual, setManual] = useState(!suggestion);
+  const [group, setGroup] = useState(suggestion ? suggestion.group : (t.amount > 0 ? 'Deposits' : 'Needs'));
+  const [remember, setRemember] = useState(true);
+  const merchantKey = normalizeMerchant(t.description);
   const catOptions = state.categories.filter(c => c.group === group);
 
-  // Mobile's native <select> picker fires 'change' then 'blur' back-to-back,
-  // often before React has re-rendered from the 'change' handler's setState --
-  // so onBlur/onKeyDown reading `group`/`categoryId` straight from state can
-  // commit a stale (pre-selection) value, which is why picks were silently
-  // not saving. Refs are updated synchronously in onChange so commit() always
-  // sees the true latest selection regardless of render timing.
-  const groupRef = React.useRef(group);
-  const categoryIdRef = React.useRef(categoryId);
+  const skipLink = (
+    <button className="text-xs text-gray-400 hover:text-gray-600 hover:underline" onClick={onSkip}>
+      Skip — come back to this later
+    </button>
+  );
 
-  function commit(nextGroup, nextCategoryId) {
-    dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { group: nextGroup, categoryId: nextCategoryId || null } });
-  }
-
-  // Selecting an option (incl. arrow-key preview) only updates local state --
-  // it does not save on its own. Saves on Enter (desktop keyboard) and on
-  // blur (mobile: there's no keyboard "Enter" event when a native picker
-  // wheel is dismissed, only a blur -- Enter-only silently broke saving on
-  // phones entirely). Blur doesn't reintroduce the original Tab-feels-like-
-  // premature-save bug: that was arrow-key *preview* firing onChange on
-  // every keypress while still focused/deciding, not blur -- blur only
-  // fires once focus genuinely leaves the field, i.e. the user is done.
-  function onKeyDown(e) {
-    if (e.key === 'Enter') commit(groupRef.current, categoryIdRef.current);
-  }
-  function onBlur() {
-    commit(groupRef.current, categoryIdRef.current);
-  }
-
-  // Safety net: onBlur/onKeyDown only fire on a *completed* interaction
-  // (dismiss the picker, click away, press Enter). If the user picks a
-  // category and is interrupted right then -- a call, switching apps,
-  // locking the phone -- before doing any of those, the pick sits in local
-  // state/refs only and is silently lost with no commit ever triggered.
-  // Confirmed via a live repro: picking a category then closing the tab
-  // with zero follow-up interaction reverted to uncategorized. Catching
-  // 'visibilitychange' (tab backgrounded) and 'pagehide' (navigating away/
-  // closing) covers both the "switched apps" and "closed the tab" cases.
-  // Guarded on categoryId actually differing from the transaction's last
-  // known saved value, so untouched rows (the vast majority at any given
-  // moment) don't fire spurious commits.
-  React.useEffect(() => {
-    function commitIfDirty() {
-      if (categoryIdRef.current && categoryIdRef.current !== (t.categoryId || '')) {
-        commit(groupRef.current, categoryIdRef.current);
-      }
-    }
-    function onVisibility() { if (document.hidden) commitIfDirty(); }
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('pagehide', commitIfDirty);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('pagehide', commitIfDirty);
-    };
-  }, []);
-
-  function addRule() {
-    const currentCategoryId = categoryIdRef.current;
-    if (!currentCategoryId) { window.alert('Pick a category first.'); return; }
-    const match = window.prompt('Always categorize transactions whose description contains:', t.description || '');
-    if (match && match.trim()) {
-      dispatch({ type: 'ADD_RULE', match: match.trim(), categoryId: currentCategoryId });
-      commit(groupRef.current, currentCategoryId);
+  function apply(categoryId) {
+    if (remember) {
+      // Sweeps every other matching uncategorized transaction too, and
+      // auto-applies to future imports -- see ADD_RULE in the reducer.
+      dispatch({ type: 'ADD_RULE', match: merchantKey, categoryId });
+    } else {
+      dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { group, categoryId } });
     }
   }
 
-  return (
-    <>
-      <select
-        value={group}
-        onChange={e => {
-          const nextGroup = e.target.value;
-          groupRef.current = nextGroup;
-          categoryIdRef.current = '';
-          setGroup(nextGroup);
-          setCategoryId('');
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={onBlur}
-        className="border rounded px-2 py-1.5 text-sm bg-white"
-      >
-        {CATEGORIZABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
-      </select>
-      <select
-        value={categoryId}
-        onChange={e => {
-          const nextCategoryId = e.target.value;
-          categoryIdRef.current = nextCategoryId;
-          setCategoryId(nextCategoryId);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={onBlur}
-        className="border rounded px-2 py-1.5 text-sm bg-white"
-      >
-        <option value="">— pick category —</option>
-        {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-      </select>
-      <button
-        type="button"
-        onClick={addRule}
-        title="Always categorize transactions like this one the same way"
-        className="text-xs text-blue-600 hover:underline whitespace-nowrap px-1"
-      >+ rule</button>
-    </>
+  const rememberToggle = (
+    <label className="flex items-center gap-1.5 justify-center text-xs text-gray-500 cursor-pointer">
+      <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+      Always do this for "{merchantKey}"
+    </label>
   );
-}
-
-function CategorizeRow({ t }) {
-  const { state } = useContext(BudgetContext);
-  const accName = (state.accounts.find(a => a.id === t.accountId) || {}).name || '—';
 
   return (
-    <tr className="border-b last:border-0 bg-orange-50">
-      <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
-      <td className="px-2 py-1">{accName}</td>
-      <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
-      <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-      <td className="px-2 py-1 text-gray-500">{t.memo}</td>
-      <td className="px-2 py-1"><GroupCategoryPicker t={t} /></td>
-    </tr>
-  );
-}
+    <div className="bg-white rounded-lg shadow-sm border p-4 max-w-md mx-auto">
+      <div className="text-center mb-3">
+        <div className="font-semibold text-gray-800">{t.description}</div>
+        <div className="text-xs text-gray-500 mt-0.5">{t.date} · {accName}{t.memo ? ` · ${t.memo}` : ''}</div>
+        <div className={`text-xl font-semibold tabular-nums mt-1 ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
+        {wasSkipped && <div className="text-[11px] text-gray-400 mt-1">You skipped this one before</div>}
+      </div>
 
-function CategorizeCard({ t }) {
-  const { state } = useContext(BudgetContext);
-  const accName = (state.accounts.find(a => a.id === t.accountId) || {}).name || '—';
-
-  return (
-    <div className="bg-orange-50 border rounded-lg p-2.5 mb-2">
-      <div className="flex justify-between items-start mb-1">
+      {suggestion && !manual ? (
         <div>
-          <div className="font-semibold text-gray-800 text-[13px]">{t.description}</div>
-          <div className="text-[11px] text-gray-500">{t.date} · {accName}{t.memo ? ` · ${t.memo}` : ''}</div>
+          <button
+            onClick={() => apply(suggestion.categoryId)}
+            className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 mb-2"
+          >
+            {suggestion.group} → {suggestion.categoryName}
+          </button>
+          <div className="flex items-center justify-between gap-2">
+            {rememberToggle}
+            <button className="text-xs text-blue-600 hover:underline whitespace-nowrap" onClick={() => setManual(true)}>Not this one</button>
+          </div>
+          <div className="text-center mt-2">{skipLink}</div>
         </div>
-        <div className={`font-semibold tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
-      </div>
-      <div className="flex gap-2 mt-2">
-        <GroupCategoryPicker t={t} />
-      </div>
+      ) : (
+        <div>
+          <div className="flex flex-wrap gap-1.5 justify-center mb-2">
+            {CATEGORIZABLE_GROUPS.map(g => (
+              <button
+                key={g}
+                onClick={() => setGroup(g)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium border ${group === g ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+              >{g}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5 justify-center mb-3">
+            {catOptions.length === 0 ? (
+              <div className="text-xs text-gray-400">No categories in {group} yet — add one from Manage Categories.</div>
+            ) : catOptions.map(c => (
+              <button
+                key={c.id}
+                onClick={() => apply(c.id)}
+                className="px-3 py-1.5 rounded-full text-sm font-medium border bg-white text-gray-700 border-gray-300 hover:bg-blue-50 hover:border-blue-300"
+              >{c.name}</button>
+            ))}
+          </div>
+          {rememberToggle}
+          <div className="flex items-center justify-center gap-3 mt-1.5">
+            {suggestion && (
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => setManual(false)}>← back to suggestion</button>
+            )}
+            {skipLink}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1634,15 +1618,69 @@ function RulesPanel() {
   );
 }
 
+const SKIPPED_STORAGE_KEY = 'simplebudget1_skipped_categorize';
+
+function loadSkipped() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SKIPPED_STORAGE_KEY) || '[]'));
+  } catch { return new Set(); }
+}
+
 function CategorizeView() {
   const { state } = useContext(BudgetContext);
-  const rows = state.transactions.filter(needsCategorizing).sort((a, b) => b.date.localeCompare(a.date));
   const transferCandidates = findTransferCandidates(state);
+  const [skipped, setSkipped] = useState(loadSkipped);
+
+  // Suggestion-backed ones first -- those clear in one tap, so working
+  // through them first drops the remaining count fast instead of front-
+  // loading the slower manual picks. Skipped ones (user said "not now, come
+  // back to this") sink to the very end of each bucket instead of vanishing
+  // -- they resurface once everything else has had a pass, rather than
+  // getting stuck in limbo or immediately reappearing right after skipping.
+  const rows = useMemo(() => {
+    const withSuggestion = [];
+    const withoutSuggestion = [];
+    for (const t of state.transactions.filter(needsCategorizing)) {
+      (suggestCategoryFor(state, t) ? withSuggestion : withoutSuggestion).push(t);
+    }
+    const byDateDesc = (a, b) => b.date.localeCompare(a.date);
+    const bySkippedThenDate = (a, b) => {
+      const as = skipped.has(a.id), bs = skipped.has(b.id);
+      if (as !== bs) return as ? 1 : -1;
+      return byDateDesc(a, b);
+    };
+    return [...withSuggestion.sort(bySkippedThenDate), ...withoutSuggestion.sort(bySkippedThenDate)];
+  }, [state, skipped]);
+
+  // Prune ids that are no longer in the queue (categorized since, or the
+  // transaction was deleted) so this doesn't grow forever in localStorage.
+  useEffect(() => {
+    const liveIds = new Set(rows.map(t => t.id));
+    setSkipped(prev => {
+      const next = new Set([...prev].filter(id => liveIds.has(id)));
+      if (next.size === prev.size) return prev;
+      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  }, [rows]);
+
+  function skip(id) {
+    setSkipped(prev => {
+      const next = new Set(prev).add(id);
+      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  }
+
+  const current = rows[0];
+  const skippedCount = rows.filter(t => skipped.has(t.id)).length;
 
   return (
     <div className="p-3 md:p-4">
       <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
-      <p className="text-xs text-gray-500 mb-2.5">Pick a Group and Category for each, then press Enter to save.</p>
+      <p className="text-xs text-gray-500 mb-2.5">
+        {rows.length === 0 ? 'One at a time — confirm or pick, then the next one shows up.' : `${rows.length} left${skippedCount ? ` (${skippedCount} skipped for later)` : ''}`}
+      </p>
       <RulesPanel />
       {transferCandidates.length > 0 && (
         <div className="mb-3">
@@ -1651,31 +1689,10 @@ function CategorizeView() {
           ))}
         </div>
       )}
-      {rows.length === 0 ? (
+      {!current ? (
         <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">All caught up — nothing left to categorize.</div>
       ) : (
-        <>
-          <div className="sm:hidden">
-            {rows.map(t => <CategorizeCard key={t.id} t={t} />)}
-          </div>
-          <div className="hidden sm:block bg-white rounded-lg shadow-sm border overflow-x-auto">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
-                <th className="text-left px-2 py-1.5 font-semibold">Date</th>
-                <th className="text-left px-2 py-1.5 font-semibold">Account</th>
-                <th className="text-left px-2 py-1.5 font-semibold">Description</th>
-                <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
-                <th className="text-left px-2 py-1.5 font-semibold">Memo</th>
-                <th className="text-left px-2 py-1.5 font-semibold">Group / Category</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(t => <CategorizeRow key={t.id} t={t} />)}
-            </tbody>
-          </table>
-        </div>
-        </>
+        <ReviewCard key={current.id} t={current} onSkip={() => skip(current.id)} wasSkipped={skipped.has(current.id)} />
       )}
     </div>
   );
