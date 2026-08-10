@@ -1639,18 +1639,28 @@ function CategorizeView() {
   // -- they resurface once everything else has had a pass, rather than
   // getting stuck in limbo or immediately reappearing right after skipping.
   const rows = useMemo(() => {
-    const withSuggestion = [];
-    const withoutSuggestion = [];
-    for (const t of state.transactions.filter(needsCategorizing)) {
-      (suggestCategoryFor(state, t) ? withSuggestion : withoutSuggestion).push(t);
-    }
     const byDateDesc = (a, b) => b.date.localeCompare(a.date);
-    const bySkippedThenDate = (a, b) => {
-      const as = skipped.has(a.id), bs = skipped.has(b.id);
-      if (as !== bs) return as ? 1 : -1;
-      return byDateDesc(a, b);
+    // Split by skipped status FIRST -- every not-yet-skipped transaction
+    // (suggested or not) must come before ANY skipped one, otherwise a
+    // skipped item stuck at the front of the suggestion bucket blocks the
+    // whole queue forever once every other suggestion-backed item is gone,
+    // even though plenty of not-skipped manual-pick items are still
+    // waiting in the other bucket (confirmed live 2026-08-10: this
+    // wasn't "no items left," it was this ordering bug).
+    const bucketBySuggestion = (list) => {
+      const withSuggestion = [];
+      const withoutSuggestion = [];
+      for (const t of list) {
+        (suggestCategoryFor(state, t) ? withSuggestion : withoutSuggestion).push(t);
+      }
+      return [...withSuggestion.sort(byDateDesc), ...withoutSuggestion.sort(byDateDesc)];
     };
-    return [...withSuggestion.sort(bySkippedThenDate), ...withoutSuggestion.sort(bySkippedThenDate)];
+    const notSkipped = [];
+    const skippedItems = [];
+    for (const t of state.transactions.filter(needsCategorizing)) {
+      (skipped.has(t.id) ? skippedItems : notSkipped).push(t);
+    }
+    return [...bucketBySuggestion(notSkipped), ...bucketBySuggestion(skippedItems)];
   }, [state, skipped]);
 
   // Prune ids that are no longer in the queue (categorized since, or the
