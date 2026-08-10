@@ -1387,7 +1387,7 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
   const suggestion = useMemo(() => suggestCategoryFor(state, t), [state, t]);
   const [manual, setManual] = useState(!suggestion);
   const [group, setGroup] = useState(suggestion ? suggestion.group : (t.amount > 0 ? 'Deposits' : 'Needs'));
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(false);
   const merchantKey = normalizeMerchant(t.description);
   const catOptions = state.categories.filter(c => c.group === group);
 
