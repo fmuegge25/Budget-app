@@ -1630,6 +1630,7 @@ function CategorizeView() {
   const { state } = useContext(BudgetContext);
   const transferCandidates = findTransferCandidates(state);
   const [skipped, setSkipped] = useState(loadSkipped);
+  const [showList, setShowList] = useState(false);
 
   // Suggestion-backed ones first -- those clear in one tap, so working
   // through them first drops the remaining count fast instead of front-
@@ -1680,8 +1681,30 @@ function CategorizeView() {
       <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
       <p className="text-xs text-gray-500 mb-2.5">
         {rows.length === 0 ? 'One at a time — confirm or pick, then the next one shows up.' : `${rows.length} left${skippedCount ? ` (${skippedCount} skipped for later)` : ''}`}
+        {rows.length > 0 && (
+          <>
+            {' · '}
+            <button onClick={() => setShowList(s => !s)} className="text-blue-600 hover:underline">
+              {showList ? 'hide list' : 'view list'}
+            </button>
+          </>
+        )}
       </p>
       <RulesPanel />
+      {showList && rows.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border mb-3 divide-y max-h-64 overflow-y-auto">
+          {rows.map(t => {
+            const acc = state.accounts.find(a => a.id === t.accountId);
+            return (
+              <div key={t.id} className="flex items-center justify-between px-2.5 py-1.5 text-xs gap-2">
+                <span className="truncate flex-1 min-w-0">{t.description}</span>
+                <span className="text-gray-400 whitespace-nowrap">{t.date}{acc ? ` · ${acc.name}` : ''}</span>
+                <span className={`font-semibold whitespace-nowrap ${moneyClass(t.amount)}`}>{fmt(t.amount)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {transferCandidates.length > 0 && (
         <div className="mb-3">
           {transferCandidates.map(([outTx, inTx]) => (

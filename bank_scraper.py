@@ -75,7 +75,23 @@ def open_bank_page(pw):
         user_data_dir=str(PROFILE_DIR), headless=False,
     )
     page = context.pages[0] if context.pages else context.new_page()
-    page.goto(BANK_URL, wait_until="domcontentloaded")
+
+    # The 7am run is WakeToRun-triggered -- confirmed live 2026-08-03 that a
+    # run can fire and crash with net::ERR_NAME_NOT_RESOLVED while DNS/network
+    # is still coming back up right after the PC wakes from sleep, even though
+    # the domain resolves fine moments later. Retry the initial load a few
+    # times with a short wait instead of treating this as a hard failure.
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            page.goto(BANK_URL, wait_until="domcontentloaded")
+            break
+        except Exception:
+            if attempts >= 5:
+                raise
+            print(f"Couldn't reach {BANK_URL} (attempt {attempts}/5) -- network may still be coming up, retrying in 15s...")
+            page.wait_for_timeout(15000)
     page.wait_for_timeout(1500)
     return context, page
 
@@ -226,10 +242,12 @@ def download_csv(page, bank_account_name):
         page.click("nav >> text=Accounts", timeout=15000)
     page.wait_for_timeout(800)
     close_contact_info_prompt(page)
-    # Scope to the open dropdown panel specifically -- a short name like
-    # "Savings" can match a hidden duplicate elsewhere on the page, which
-    # Playwright would otherwise try (and fail) to click.
-    page.locator("#accounts_tab-dropdown").get_by_text(bank_account_name, exact=True).first.click()
+    # SEB redesigned the site 2026-08 -- the old #accounts_tab-dropdown list
+    # is gone. Each account link in the new "Accounts" nav mega-menu instead
+    # carries a stable data-test="account-megamenu-{id}-link" + title="{name}"
+    # (confirmed via live DevTools inspection 2026-08-10), which also sidesteps
+    # the old short-name-matches-a-hidden-duplicate problem entirely.
+    page.locator(f'[data-test^="account-megamenu-"][title="{bank_account_name}"]').click()
     page.wait_for_timeout(1500)
 
     # Verify the switch actually landed -- confirmed failure mode: the click
@@ -240,9 +258,18 @@ def download_csv(page, bank_account_name):
     # The account name isn't in a semantic <h1>/<h2> -- check for a
     # *visible* match instead (a hidden duplicate can still sit in the
     # closed Accounts dropdown's DOM, so count() alone isn't enough).
-    matches = page.get_by_text(bank_account_name, exact=True)
-    landed = any(matches.nth(i).is_visible() for i in range(matches.count()))
-    if not landed:
+    def _landed():
+        matches = page.get_by_text(bank_account_name, exact=True)
+        return any(matches.nth(i).is_visible() for i in range(matches.count()))
+
+    # The very first account right after a fresh login can still be showing
+    # loading spinners at the 1500ms mark (confirmed live 2026-08-10 -- the
+    # SPA's first render is slower than every subsequent account switch in
+    # the same run) -- give it one more beat before treating it as a real
+    # stuck-modal failure.
+    if not _landed():
+        page.wait_for_timeout(2500)
+    if not _landed():
         raise RuntimeError(
             f"Account switch to '{bank_account_name}' didn't land -- "
             f"still on a different account's page (possibly a stuck modal)."
@@ -250,13 +277,13 @@ def download_csv(page, bank_account_name):
 
     page.click("text=Download")
     page.wait_for_timeout(1000)
-    # "Spreadsheet CSV" is the default format per the bank's export menu.
-    fmt = page.locator("text=Spreadsheet CSV").first
-    if fmt.count():
-        fmt.click()
-        page.wait_for_timeout(500)
+    # "Spreadsheet CSV" is already the pre-selected default format in the
+    # new Download modal (confirmed via live screenshot 2026-08-10) -- no
+    # need to open/click the format dropdown. Submit via its stable id
+    # instead of "text=Download" (that text also matches the icon link that
+    # opens this modal, which made the old .last-based selection fragile).
     with page.expect_download(timeout=30000) as dl_info:
-        page.locator("text=Download").last.click()
+        page.locator("#download_but").click()
     download = dl_info.value
     path = ROOT / "last_bank_export.csv"
     download.save_as(str(path))
