@@ -1736,6 +1736,8 @@ function CategorizeView() {
 function AllAccountsView({ setView }) {
   const { state } = useContext(BudgetContext);
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const accName = (id) => { const a = state.accounts.find(a => a.id === id); return a ? a.name : '—'; };
   function catName(t) {
     if (t.group === 'Deposits') return 'Deposit';
@@ -1745,14 +1747,19 @@ function AllAccountsView({ setView }) {
     return c ? c.name : '—';
   }
   function matchesFilter(t) {
-    if (!categoryFilter) return true;
-    if (categoryFilter === '__uncategorized__') return !t.group;
-    if (categoryFilter === '__deposits__') return t.group === 'Deposits';
-    if (categoryFilter === '__transfer__') return t.group === 'Transfer';
-    return t.categoryId === categoryFilter;
+    if (categoryFilter) {
+      if (categoryFilter === '__uncategorized__' && t.group) return false;
+      else if (categoryFilter === '__deposits__' && t.group !== 'Deposits') return false;
+      else if (categoryFilter === '__transfer__' && t.group !== 'Transfer') return false;
+      else if (!['__uncategorized__', '__deposits__', '__transfer__'].includes(categoryFilter) && t.categoryId !== categoryFilter) return false;
+    }
+    if (dateFrom && t.date < dateFrom) return false;
+    if (dateTo && t.date > dateTo) return false;
+    return true;
   }
   const rows = state.transactions.filter(matchesFilter).sort((a, b) => b.date.localeCompare(a.date));
   const filteredTotal = rows.reduce((s, t) => s + t.amount, 0);
+  const hasFilter = categoryFilter || dateFrom || dateTo;
 
   return (
     <div className="p-3 md:p-4">
@@ -1778,7 +1785,27 @@ function AllAccountsView({ setView }) {
             );
           })}
         </select>
-        {categoryFilter && (
+        <label className="text-xs text-gray-500 ml-1">From:</label>
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={e => setDateFrom(e.target.value)}
+          className="border rounded px-2 py-1 text-sm bg-white"
+        />
+        <label className="text-xs text-gray-500">To:</label>
+        <input
+          type="date"
+          value={dateTo}
+          onChange={e => setDateTo(e.target.value)}
+          className="border rounded px-2 py-1 text-sm bg-white"
+        />
+        {(dateFrom || dateTo) && (
+          <button
+            onClick={() => { setDateFrom(''); setDateTo(''); }}
+            className="text-xs text-blue-600 hover:underline"
+          >clear dates</button>
+        )}
+        {hasFilter && (
           <span className="text-xs text-gray-500">
             {rows.length} transaction{rows.length === 1 ? '' : 's'} · total{' '}
             <span className={`font-semibold tabular-nums ${moneyClass(filteredTotal)}`}>{fmt(filteredTotal)}</span>
