@@ -1388,8 +1388,15 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
   const [manual, setManual] = useState(!suggestion);
   const [group, setGroup] = useState(suggestion ? suggestion.group : (t.amount > 0 ? 'Deposits' : 'Needs'));
   const [remember, setRemember] = useState(false);
+  const [memo, setMemo] = useState(t.memo || '');
   const merchantKey = normalizeMerchant(t.description);
   const catOptions = state.categories.filter(c => c.group === group);
+
+  function saveMemo() {
+    if (memo !== (t.memo || '')) {
+      dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { memo } });
+    }
+  }
 
   const skipLink = (
     <button className="text-xs text-gray-400 hover:text-gray-600 hover:underline" onClick={onSkip}>
@@ -1418,9 +1425,16 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
     <div className="bg-white rounded-lg shadow-sm border p-4 max-w-md mx-auto">
       <div className="text-center mb-3">
         <div className="font-semibold text-gray-800">{t.description}</div>
-        <div className="text-xs text-gray-500 mt-0.5">{t.date} · {accName}{t.memo ? ` · ${t.memo}` : ''}</div>
+        <div className="text-xs text-gray-500 mt-0.5">{t.date} · {accName}</div>
         <div className={`text-xl font-semibold tabular-nums mt-1 ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
         {wasSkipped && <div className="text-[11px] text-gray-400 mt-1">You skipped this one before</div>}
+        <input
+          value={memo}
+          onChange={e => setMemo(e.target.value)}
+          onBlur={saveMemo}
+          placeholder="Add a memo..."
+          className="mt-2 w-full border rounded px-2 py-1 text-xs text-center text-gray-600"
+        />
       </div>
 
       {suggestion && !manual ? (
