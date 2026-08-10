@@ -1747,6 +1747,45 @@ function CategorizeView() {
   );
 }
 
+function MemoCell({ t }) {
+  const { dispatch } = useContext(BudgetContext);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(t.memo || '');
+
+  function save() {
+    setEditing(false);
+    if (value !== (t.memo || '')) {
+      dispatch({ type: 'UPDATE_TRANSACTION', id: t.id, patch: { memo: value } });
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={e => {
+          if (e.key === 'Enter') e.target.blur();
+          if (e.key === 'Escape') { setValue(t.memo || ''); setEditing(false); }
+        }}
+        onClick={e => e.stopPropagation()}
+        className="border rounded px-1 py-0.5 text-xs w-full"
+      />
+    );
+  }
+  return (
+    <span
+      onClick={e => { e.stopPropagation(); setEditing(true); }}
+      title={t.memo || 'Add a memo'}
+      className={`block truncate cursor-text hover:underline decoration-dotted ${t.memo ? 'text-gray-600' : 'text-gray-300 italic'}`}
+    >
+      {t.memo || 'add memo'}
+    </span>
+  );
+}
+
 function AllAccountsView({ setView }) {
   const { state } = useContext(BudgetContext);
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -1836,6 +1875,7 @@ function AllAccountsView({ setView }) {
               <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
               <th className="text-left px-2 py-1.5 font-semibold">Group</th>
               <th className="text-left px-2 py-1.5 font-semibold">Category</th>
+              <th className="text-left px-2 py-1.5 font-semibold">Memo</th>
             </tr>
           </thead>
           <tbody>
@@ -1851,10 +1891,11 @@ function AllAccountsView({ setView }) {
                 <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
                 <td className="px-2 py-1">{t.group || '—'}</td>
                 <td className={`px-2 py-1 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+                <td className="px-2 py-1 max-w-[160px]" onClick={e => e.stopPropagation()}><MemoCell t={t} /></td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan="6" className="px-2 py-6 text-center text-gray-400">
+              <tr><td colSpan="7" className="px-2 py-6 text-center text-gray-400">
                 {categoryFilter ? 'No transactions in this category' : 'No transactions yet'}
               </td></tr>
             )}
