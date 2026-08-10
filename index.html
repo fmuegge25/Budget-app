@@ -1620,33 +1620,34 @@ function RulesPanel() {
 
 const SKIPPED_STORAGE_KEY = 'simplebudget1_skipped_categorize';
 
-function loadSkipped() {
+// Stored as an ARRAY (not a Set) because order matters: it's a queue of
+// "come back to this later" ids, oldest-skip-first. Skipping something
+// again moves it to the back instead of being a no-op -- otherwise, once
+// every remaining item has been skipped once, re-skipping the current card
+// does nothing (already a member) and the queue freezes on whichever one
+// happens to sort first, forever (confirmed live 2026-08-10: this is
+// exactly what happened once all 46 remaining items had been skipped).
+function loadSkippedOrder() {
   try {
-    return new Set(JSON.parse(localStorage.getItem(SKIPPED_STORAGE_KEY) || '[]'));
-  } catch { return new Set(); }
+    return JSON.parse(localStorage.getItem(SKIPPED_STORAGE_KEY) || '[]');
+  } catch { return []; }
 }
 
 function CategorizeView() {
   const { state } = useContext(BudgetContext);
   const transferCandidates = findTransferCandidates(state);
-  const [skipped, setSkipped] = useState(loadSkipped);
+  const [skippedOrder, setSkippedOrder] = useState(loadSkippedOrder);
+  const skipped = useMemo(() => new Set(skippedOrder), [skippedOrder]);
   const [showList, setShowList] = useState(false);
 
   // Suggestion-backed ones first -- those clear in one tap, so working
   // through them first drops the remaining count fast instead of front-
-  // loading the slower manual picks. Skipped ones (user said "not now, come
-  // back to this") sink to the very end of each bucket instead of vanishing
-  // -- they resurface once everything else has had a pass, rather than
-  // getting stuck in limbo or immediately reappearing right after skipping.
+  // loading the slower manual picks. Not-yet-skipped items (of either kind)
+  // always come before ANY skipped one. Skipped items cycle in skip order
+  // (oldest-skipped first), so re-skipping the current card always surfaces
+  // a *different* one next instead of freezing on the same card.
   const rows = useMemo(() => {
     const byDateDesc = (a, b) => b.date.localeCompare(a.date);
-    // Split by skipped status FIRST -- every not-yet-skipped transaction
-    // (suggested or not) must come before ANY skipped one, otherwise a
-    // skipped item stuck at the front of the suggestion bucket blocks the
-    // whole queue forever once every other suggestion-backed item is gone,
-    // even though plenty of not-skipped manual-pick items are still
-    // waiting in the other bucket (confirmed live 2026-08-10: this
-    // wasn't "no items left," it was this ordering bug).
     const bucketBySuggestion = (list) => {
       const withSuggestion = [];
       const withoutSuggestion = [];
@@ -1660,25 +1661,26 @@ function CategorizeView() {
     for (const t of state.transactions.filter(needsCategorizing)) {
       (skipped.has(t.id) ? skippedItems : notSkipped).push(t);
     }
-    return [...bucketBySuggestion(notSkipped), ...bucketBySuggestion(skippedItems)];
-  }, [state, skipped]);
+    skippedItems.sort((a, b) => skippedOrder.indexOf(a.id) - skippedOrder.indexOf(b.id));
+    return [...bucketBySuggestion(notSkipped), ...skippedItems];
+  }, [state, skipped, skippedOrder]);
 
   // Prune ids that are no longer in the queue (categorized since, or the
   // transaction was deleted) so this doesn't grow forever in localStorage.
   useEffect(() => {
     const liveIds = new Set(rows.map(t => t.id));
-    setSkipped(prev => {
-      const next = new Set([...prev].filter(id => liveIds.has(id)));
-      if (next.size === prev.size) return prev;
-      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify([...next]));
+    setSkippedOrder(prev => {
+      const next = prev.filter(id => liveIds.has(id));
+      if (next.length === prev.length) return prev;
+      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }, [rows]);
 
   function skip(id) {
-    setSkipped(prev => {
-      const next = new Set(prev).add(id);
-      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify([...next]));
+    setSkippedOrder(prev => {
+      const next = [...prev.filter(x => x !== id), id];
+      localStorage.setItem(SKIPPED_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }
