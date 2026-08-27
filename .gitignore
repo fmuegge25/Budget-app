@@ -18,3 +18,8 @@ pa_browser_profile/
 amazon_profile_1/
 amazon_profile_2/
 scraper_run.log
+cloud_backup_*.json
+checking_fresh.csv
+troubleshoot_scrape.log
+reconcile_deep.out
+smoke_dupes.png

@@ -272,17 +272,32 @@ def import_csv():
             # differently between two exports of the same day, so a plain
             # description+amount match silently re-added every 07/10 and
             # 07/13 transaction a second time.
-            exact = next(
-                (t for d in (r["date"], _shifted(r["date"], -1), _shifted(r["date"], 1))
-                 for t in by_date.get(d, [])
-                 if t["id"] not in claimed and t["amount"] == r["amount"]
-                 and (
-                     t["description"] == r["description"]
-                     or t.get("group") == "Transfer"
-                     or (d == r["date"] and _is_prefix_pair(t["description"], r["description"]))
-                 )),
-                None,
-            )
+            # A raw placeholder description (000000…) is the bank's own unique
+            # reference number, so an identical one for the same amount is the
+            # same authorization no matter how many days apart -- the bank can
+            # keep re-listing a pending row for several days, and importing it
+            # once per day was creating a stack of identical phantom rows.
+            # Matched across ±4 days for placeholders only. Every other case
+            # (identical real description, Transfer, prefix-only) keeps the
+            # original tight window; the in-app "Possible Duplicates" queue is
+            # the backstop for slower multi-day settles, since widening the
+            # automatic match there was tried and reverted (coincidental
+            # same-amount purchases on different days got silently merged).
+            exact = None
+            r_is_placeholder = is_placeholder_description(r["description"])
+            deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4) if r_is_placeholder else (0, -1, 1)
+            for delta in deltas:
+                d = r["date"] if delta == 0 else _shifted(r["date"], delta)
+                for t in by_date.get(d, []):
+                    if t["id"] in claimed or t["amount"] != r["amount"]:
+                        continue
+                    if (t["description"] == r["description"]
+                            or (abs(delta) <= 1 and t.get("group") == "Transfer")
+                            or (d == r["date"] and _is_prefix_pair(t["description"], r["description"]))):
+                        exact = t
+                        break
+                if exact:
+                    break
             if exact:
                 claimed.add(exact["id"])
                 continue

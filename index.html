@@ -583,20 +583,53 @@ function findDuplicateCandidates(state) {
     for (let i = 0; i < txns.length; i++) {
       for (let j = i + 1; j < txns.length; j++) {
         const a = txns[i], b = txns[j];
-        if (a.amount !== b.amount) continue;
         const key = [a.id, b.id].sort().join('|');
         if (dismissed.has(key)) continue;
         const daysApart = Math.abs((new Date(a.date) - new Date(b.date)) / 86400000);
+        if (daysApart > 7) continue;
+        const sameSign = (a.amount < 0) === (b.amount < 0);
+        if (!sameSign) continue;
+        const sameAmount = a.amount === b.amount;
         const aPlaceholder = isPlaceholderDescription(a.description);
         const bPlaceholder = isPlaceholderDescription(b.description);
-        const placeholderSettle = aPlaceholder !== bPlaceholder && daysApart <= 7;
-        const nearExact = !placeholderSettle && daysApart <= 2
+        const lo = Math.min(Math.abs(a.amount), Math.abs(b.amount));
+        const hi = Math.max(Math.abs(a.amount), Math.abs(b.amount));
+        // A pending placeholder (000000…) later posting under the real
+        // merchant name -- the amount often firms up too (a tip settles, a
+        // hold releases at the final total), so allow up to +30% between the
+        // placeholder and the named row, not just an exact amount match.
+        const placeholderSettle = (aPlaceholder !== bPlaceholder)
+          && (sameAmount || hi <= lo * 1.3);
+        // The same charge imported twice: identical descriptions (including
+        // two raw placeholders that never got merged), or one description a
+        // prefix of the other (the bank truncates the merchant string
+        // differently between exports). Widened to 4 days because a batch of
+        // weekend pending rows can all post together on the next business day.
+        const dupImport = sameAmount && daysApart <= 4
           && (a.description === b.description || isPrefixPair(a.description, b.description));
-        if (placeholderSettle || nearExact) pairs.push({ key, a, b });
+        if (placeholderSettle || dupImport) pairs.push({ key, a, b });
       }
     }
   }
   return pairs.sort((p, q) => q.a.date.localeCompare(p.a.date));
+}
+
+// Placeholder rows (000000…) that never resolved to a real merchant name and
+// are now more than 10 days old are almost always a card authorization hold
+// the bank released without ever posting a charge -- they sit in the ledger
+// as phantom expenses dragging the balance down. Surfaced for one-click
+// removal (never auto-deleted). Anything already listed as a duplicate pair,
+// or that the user has categorized, is left alone.
+function findStalePlaceholders(state) {
+  const paired = new Set();
+  for (const p of findDuplicateCandidates(state)) { paired.add(p.a.id); paired.add(p.b.id); }
+  const cutoff = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
+  return state.transactions
+    .filter(t => !t.linkId && !paired.has(t.id)
+      && isPlaceholderDescription(t.description)
+      && needsCategorizing(t)
+      && t.date < cutoff)
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function findTransferCandidates(state) {
@@ -653,7 +686,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
   const { state, dispatch } = useContext(BudgetContext);
   const rta = readyToAssign(state, monthKey);
   const uncategorizedCount = countUncategorized(state);
-  const duplicateCount = findDuplicateCandidates(state).length;
+  const duplicateCount = findDuplicateCandidates(state).length + findStalePlaceholders(state).length;
   const [newAccName, setNewAccName] = useState('');
   const [newAccBal, setNewAccBal] = useState('');
 
@@ -1270,8 +1303,24 @@ function RegisterView({ accountId }) {
   const txs = state.transactions.filter(t => t.accountId === accountId).sort((a, b) => a.date.localeCompare(b.date));
   const [editingId, setEditingId] = useState(null);
 
+  // Running balance must honor a dated SET_BALANCE_OVERRIDE the same way
+  // accountBalance() does -- otherwise this column drifts away from the
+  // header total by exactly the correction amount. Rows after the latest
+  // override rebase onto the corrected figure so the final row matches the
+  // header; earlier rows keep their historical (pre-correction) running sum.
+  const _overrides = (state.balanceOverrides || {})[accountId] || {};
+  const _overrideDates = Object.keys(_overrides).sort();
+  const _latestOverride = _overrideDates.length ? _overrideDates[_overrideDates.length - 1] : null;
   let running = account ? account.startingBalance : 0;
-  const rows = txs.map(t => { running += t.amount; return { ...t, balance: running }; });
+  let _rebased = false;
+  const rows = txs.map(t => {
+    if (_latestOverride && !_rebased && t.date > _latestOverride) {
+      running = _overrides[_latestOverride];
+      _rebased = true;
+    }
+    running += t.amount;
+    return { ...t, balance: running };
+  });
 
   function catName(t) {
     if (t.group === 'Deposits') return 'Deposit';
@@ -1524,7 +1573,7 @@ function DuplicateMatchCard({ pair }) {
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
       <div className="font-semibold text-gray-800 mb-1.5 text-[13px]">
-        Possible duplicate — both {fmt(a.amount)} in {accName(a.accountId)}
+        Possible duplicate — {a.amount === b.amount ? `both ${fmt(a.amount)}` : `${fmt(a.amount)} / ${fmt(b.amount)}`} in {accName(a.accountId)}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
         {[a, b].map(t => (
@@ -1558,9 +1607,31 @@ function DuplicateMatchCard({ pair }) {
   );
 }
 
+function StalePlaceholderCard({ tx }) {
+  const { state, dispatch } = useContext(BudgetContext);
+  const accName = (state.accounts.find(a => a.id === tx.accountId) || {}).name || '—';
+  return (
+    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-2">
+      <div className="font-semibold text-gray-800 mb-1 text-[13px]">
+        Stale pending charge — {fmt(tx.amount)} in {accName}
+      </div>
+      <div className="text-[12px] text-gray-600 mb-2">
+        {tx.date} — “{tx.description}” never posted under a real merchant name. Usually a card hold the bank released without charging.
+      </div>
+      <button
+        className="px-2.5 py-1 bg-rose-600 text-white rounded text-xs font-medium hover:bg-rose-700"
+        onClick={() => dispatch({ type: 'DELETE_TRANSACTION', id: tx.id })}
+      >
+        Delete this phantom charge
+      </button>
+    </div>
+  );
+}
+
 function DuplicatesView() {
   const { state } = useContext(BudgetContext);
   const pairs = findDuplicateCandidates(state);
+  const stale = findStalePlaceholders(state);
   return (
     <div className="p-3 md:p-4">
       <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Possible Duplicates</h2>
@@ -1568,6 +1639,12 @@ function DuplicatesView() {
       {pairs.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">No possible duplicates found.</div>
       ) : pairs.map(p => <DuplicateMatchCard key={p.key} pair={p} />)}
+      {stale.length > 0 && (
+        <>
+          <h3 className="text-sm font-semibold text-gray-800 mt-4 mb-2">Stale pending charges ({stale.length})</h3>
+          {stale.map(t => <StalePlaceholderCard key={t.id} tx={t} />)}
+        </>
+      )}
     </div>
   );
 }
