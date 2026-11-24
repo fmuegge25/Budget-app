@@ -9,20 +9,54 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="Budget" />
-<meta name="theme-color" content="#2563eb" />
+<meta name="theme-color" content="#f4f6fb" />
 <meta name="color-scheme" content="light" />
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
-  html, body { background: #f3f4f6; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+  html, body { background: #f4f6fb; }
+  body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    color: #1e293b;
+  }
+  .tabular-nums, td, .num { font-variant-numeric: tabular-nums; }
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* Cards: soft layered shadow instead of a hard border */
+  .card { background: #fff; border-radius: 14px; border: 1px solid #e8ecf4;
+          box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 4px 14px -6px rgba(15,23,42,.08); }
+
+  /* Tables everywhere: quieter header, airy rows, soft hover */
+  table thead tr { background: #f8fafc !important; }
+  table thead th { color: #64748b; letter-spacing: .04em; }
+  table tbody tr { border-color: #eef1f6 !important; }
+  table tbody tr:hover { background: #f1f5ff !important; }
+
+  /* Form controls */
+  select, input[type=text], input[type=date], input[type=number], input:not([type]) {
+    border-radius: 8px; border-color: #dbe1ea;
+  }
+  select:focus, input:focus { outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,.18); border-color: #6366f1; }
+
+  /* Budget progress bars */
+  .bar { height: 5px; border-radius: 999px; background: #eef1f6; overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: 999px; transition: width .4s ease; }
+
+  /* Thin scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #d5dbe5; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #b9c2d0; background-clip: content-box; border: 3px solid transparent; }
 </style>
 </head>
-<body class="bg-gray-100">
+<body>
 <div id="root"></div>
 <script>
   if ('serviceWorker' in navigator) {
@@ -47,7 +81,7 @@ function fmt(n) {
 function moneyClass(n) {
   if (n < -0.004) return 'text-red-600';
   if (n > 0.004) return 'text-emerald-700';
-  return 'text-gray-500';
+  return 'text-slate-500';
 }
 
 function shiftMonth(monthKey, delta) {
@@ -676,9 +710,42 @@ function EditableMoney({ value, onCommit, className, editable }) {
         const n = parseFloat(text.replace(/[^0-9.\-]/g, ''));
         onCommit(isNaN(n) ? 0 : n);
       }}
-      className={`text-right tabular-nums bg-transparent border-b border-gray-400 outline-none focus:border-blue-500 focus:bg-blue-50/40 rounded-t px-0.5 -mx-0.5 transition-colors ${className || 'w-24'}`}
+      className={`text-right tabular-nums bg-transparent border-b border-slate-400 outline-none focus:border-indigo-500 focus:bg-blue-50/40 rounded-t px-0.5 -mx-0.5 transition-colors ${className || 'w-24'}`}
       placeholder="0.00"
     />
+  );
+}
+
+// Per-group accent colors (saturated so they read at a glance)
+const GROUP_STYLE = {
+  Wants:  { bar: '#f97316', dot: 'bg-orange-500', soft: 'bg-orange-50',  text: 'text-orange-600',  emoji: '🍔' },
+  Needs:  { bar: '#3b82f6', dot: 'bg-blue-500',   soft: 'bg-blue-50',    text: 'text-blue-600',    emoji: '🏠' },
+  Bills:  { bar: '#8b5cf6', dot: 'bg-violet-500', soft: 'bg-violet-50',  text: 'text-violet-600',  emoji: '💡' },
+  Debts:  { bar: '#ec4899', dot: 'bg-pink-500',   soft: 'bg-pink-50',    text: 'text-pink-600',    emoji: '💳' },
+};
+
+const NAV_ICONS = {
+  budget: 'M4 6h16M4 12h16M4 18h10',
+  reports: 'M5 19V11m7 8V5m7 14v-6',
+  categorize: 'M7 7h.01M3 11.5V5a2 2 0 012-2h6.5l9 9-8.5 8.5-9-9z',
+  duplicates: 'M8 8h11v11H8zM5 16V5h11',
+  'all-accounts': 'M3 7h18M3 12h18M3 17h18',
+  debts: 'M3 7h18v10H3zM3 11h18',
+  'manage-categories': 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
+};
+
+function NavItem({ id, label, view, setView, badge, badgeClass }) {
+  const active = view.type === id;
+  return (
+    <button
+      onClick={() => setView({ type: id })}
+      className={`md:mx-2 md:my-px md:rounded-lg text-left px-3 py-2 md:py-1.5 text-[13.5px] font-medium flex items-center gap-2.5 whitespace-nowrap transition-colors
+        ${active ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-600 md:border-b-0' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border-b-2 border-transparent md:border-b-0'}`}
+    >
+      <svg className={`w-4 h-4 shrink-0 hidden md:block ${active ? 'text-indigo-600' : 'text-slate-400'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={NAV_ICONS[id]} /></svg>
+      <span className="flex-1">{label}</span>
+      {badge > 0 && <span className={`${badgeClass} text-white text-[11px] font-semibold rounded-full px-1.5 min-w-[1.25rem] text-center leading-5`}>{badge}</span>}
+    </button>
   );
 }
 
@@ -689,106 +756,61 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
   const duplicateCount = findDuplicateCandidates(state).length + findStalePlaceholders(state).length;
   const [newAccName, setNewAccName] = useState('');
   const [newAccBal, setNewAccBal] = useState('');
+  const netTotal = state.accounts.reduce((s, a) => s + accountBalance(state, a.id), 0);
+
+  const monthNav = (
+    <div className="flex items-center gap-0.5 bg-slate-100 rounded-lg p-0.5">
+      <button className="w-6 h-6 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm transition" onClick={() => setMonthKey(shiftMonth(monthKey, -1))}>‹</button>
+      <div className="font-semibold text-xs text-slate-700 whitespace-nowrap px-1.5">{monthLabel(monthKey)}</div>
+      <button className="w-6 h-6 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm transition" onClick={() => setMonthKey(shiftMonth(monthKey, 1))}>›</button>
+    </div>
+  );
 
   return (
-    <div className="w-full md:w-80 md:shrink-0 bg-white border-b md:border-b-0 md:border-r md:h-screen md:overflow-y-auto flex flex-col">
-      <div className="p-2.5 border-b flex items-center justify-between">
-        <div className="font-bold text-base text-gray-800">Simple Budget</div>
-        <div className="flex items-center gap-1 md:hidden">
-          <button className="px-1.5 py-0.5 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, -1))}>‹</button>
-          <div className="font-medium text-xs text-gray-700 whitespace-nowrap">{monthLabel(monthKey)}</div>
-          <button className="px-1.5 py-0.5 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, 1))}>›</button>
+    <div className="w-full md:w-72 md:shrink-0 bg-white border-b md:border-b-0 md:border-r border-slate-200/80 md:h-screen md:overflow-y-auto flex flex-col">
+      <div className="px-3 py-2.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 grid place-items-center text-white text-sm font-bold shadow-sm">$</div>
+          <div className="font-bold text-[15px] text-slate-900 tracking-tight">Simple Budget</div>
+        </div>
+        <div className="md:hidden">{monthNav}</div>
+      </div>
+
+      <div className="hidden md:flex px-3 pb-2 justify-center">{monthNav}</div>
+
+      <div className="px-3 pb-2.5">
+        <div className={`rounded-xl px-3.5 py-3 text-white shadow-md bg-gradient-to-br ${rta >= 0 ? 'from-emerald-500 to-teal-600 shadow-emerald-500/20' : 'from-rose-500 to-red-600 shadow-rose-500/25'}`}>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-white/80">{rta >= 0 ? 'Ready to Assign' : 'Over-assigned'}</div>
+          <div className="text-2xl font-extrabold tracking-tight tabular-nums leading-tight">{fmt(rta)}</div>
         </div>
       </div>
 
-      <div className="hidden md:flex p-2 border-b items-center justify-between">
-        <button className="px-1.5 py-0.5 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, -1))}>‹</button>
-        <div className="font-medium text-xs text-gray-700">{monthLabel(monthKey)}</div>
-        <button className="px-1.5 py-0.5 text-gray-500 hover:text-gray-800" onClick={() => setMonthKey(shiftMonth(monthKey, 1))}>›</button>
+      <div className="flex overflow-x-auto md:flex-col md:overflow-visible border-b md:border-b-0 border-slate-200">
+        <NavItem id="budget" label="Budget" view={view} setView={setView} />
+        <NavItem id="reports" label="Reports" view={view} setView={setView} />
+        <NavItem id="categorize" label="Needs Categorizing" view={view} setView={setView} badge={uncategorizedCount} badgeClass="bg-orange-500" />
+        <NavItem id="duplicates" label="Possible Duplicates" view={view} setView={setView} badge={duplicateCount} badgeClass="bg-amber-500" />
+        <NavItem id="all-accounts" label="All Accounts" view={view} setView={setView} />
+        <NavItem id="debts" label="Debts" view={view} setView={setView} />
+        <NavItem id="manage-categories" label="Manage Categories" view={view} setView={setView} />
       </div>
 
-      <div className="p-2.5 border-b">
-        <div className={`rounded-lg p-2.5 flex items-center gap-2 ${rta >= 0 ? 'bg-yellow-100' : 'bg-red-100'}`}>
-          {rta >= 0 ? (
-            <svg className="w-4 h-4 shrink-0 text-yellow-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-          ) : (
-            <svg className="w-4 h-4 shrink-0 text-red-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l6.28 11.19c.75 1.334-.213 2.987-1.744 2.987H3.72c-1.53 0-2.493-1.653-1.744-2.987l6.28-11.19zM10 6a1 1 0 011 1v3a1 1 0 11-2 0V7a1 1 0 011-1zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-            </svg>
-          )}
-          <div className="min-w-0">
-            <div className="text-[11px] font-medium text-gray-600 leading-tight">Ready to Assign</div>
-            <div className={`text-xl font-bold tracking-tight tabular-nums leading-tight ${rta < 0 ? 'text-red-700' : 'text-gray-900'}`}>{fmt(rta)}</div>
-          </div>
-        </div>
+      <div className="hidden md:flex items-baseline justify-between px-5 pt-4 pb-1">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Accounts</span>
+        <span className={`text-[11px] font-semibold tabular-nums ${moneyClass(netTotal)}`}>{fmt(netTotal)}</span>
       </div>
-
-      <div className="flex overflow-x-auto md:flex-col md:overflow-visible border-b md:border-b-0">
-        <button
-          onClick={() => setView({ type: 'budget' })}
-          className={`text-left px-4 py-2 font-medium whitespace-nowrap ${view.type === 'budget' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
-        >
-          Budget
-        </button>
-        <button
-          onClick={() => setView({ type: 'reports' })}
-          className={`text-left px-4 py-2 font-medium whitespace-nowrap ${view.type === 'reports' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
-        >
-          Reports
-        </button>
-        <button
-          onClick={() => setView({ type: 'categorize' })}
-          className={`text-left px-4 py-2 font-medium flex items-center gap-2 whitespace-nowrap ${view.type === 'categorize' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
-        >
-          <span>Needs Categorizing</span>
-          {uncategorizedCount > 0 && (
-            <span className="bg-orange-500 text-white text-xs rounded-full px-2 py-0.5">{uncategorizedCount}</span>
-          )}
-        </button>
-        <button
-          onClick={() => setView({ type: 'duplicates' })}
-          className={`text-left px-4 py-2 font-medium flex items-center gap-2 whitespace-nowrap ${view.type === 'duplicates' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
-        >
-          <span>Possible Duplicates</span>
-          {duplicateCount > 0 && (
-            <span className="bg-amber-500 text-white text-xs rounded-full px-2 py-0.5">{duplicateCount}</span>
-          )}
-        </button>
-        <button
-          onClick={() => setView({ type: 'all-accounts' })}
-          className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'all-accounts' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
-        >
-          All Accounts
-        </button>
-        <button
-          onClick={() => setView({ type: 'debts' })}
-          className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'debts' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
-        >
-          Debts
-        </button>
-        <button
-          onClick={() => setView({ type: 'manage-categories' })}
-          className={`text-left px-4 py-2 font-medium italic whitespace-nowrap ${view.type === 'manage-categories' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
-        >
-          Manage Categories
-        </button>
-      </div>
-
-      <div className="hidden md:block px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 mt-1">Accounts</div>
       <div className="hidden md:block flex-1 overflow-y-auto">
         {state.accounts.map(a => (
           <div
             key={a.id}
             onClick={() => setView({ type: 'register', accountId: a.id })}
-            className={`w-full text-left px-4 py-1.5 flex justify-between items-center cursor-pointer group text-sm ${view.type === 'register' && view.accountId === a.id ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
+            className={`mx-2 rounded-lg px-3 py-1.5 flex justify-between items-center cursor-pointer group text-[13px] transition-colors ${view.type === 'register' && view.accountId === a.id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}
           >
             <span className="truncate flex-1">{a.name}</span>
-            <span className={`text-sm mr-2 tabular-nums ${moneyClass(accountBalance(state, a.id))}`}>{fmt(accountBalance(state, a.id))}</span>
-            <span className="opacity-0 group-hover:opacity-100 shrink-0 flex gap-1">
+            <span className={`text-[13px] font-medium mr-1 tabular-nums group-hover:hidden ${moneyClass(accountBalance(state, a.id))}`}>{fmt(accountBalance(state, a.id))}</span>
+            <span className="hidden group-hover:flex shrink-0 gap-1.5">
               <button
-                className="text-gray-300 hover:text-blue-500 text-xs"
+                className="text-slate-300 hover:text-blue-500 text-xs"
                 onClick={(e) => {
                   e.stopPropagation();
                   const name = window.prompt('Rename account', a.name);
@@ -796,7 +818,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
                 }}
               >rename</button>
               <button
-                className="text-gray-300 hover:text-blue-500 text-xs"
+                className="text-slate-300 hover:text-blue-500 text-xs"
                 title="Correct the balance as of a specific date -- doesn't change any earlier date's balance, only that date forward"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -811,7 +833,7 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
                 }}
               >balance</button>
               <button
-                className="text-gray-300 hover:text-red-500 text-xs"
+                className="text-slate-300 hover:text-red-500 text-xs"
                 onClick={(e) => {
                   e.stopPropagation();
                   if (window.confirm(`Delete "${a.name}" and all its transactions? This can't be undone.`)) {
@@ -825,14 +847,14 @@ function Sidebar({ view, setView, monthKey, setMonthKey }) {
         ))}
       </div>
 
-      <div className="hidden md:block p-3 border-t text-sm">
-        <input className="w-full border rounded px-2 py-1 mb-1" placeholder="New account name"
+      <div className="hidden md:block p-3 border-t border-slate-100 text-[13px]">
+        <input className="w-full border rounded-lg px-2.5 py-1.5 mb-1.5" placeholder="New account name"
           value={newAccName} onChange={e => setNewAccName(e.target.value)} />
         <div className="flex gap-1">
-          <input className="w-full border rounded px-2 py-1" placeholder="Starting balance"
+          <input className="w-full border rounded-lg px-2.5 py-1.5" placeholder="Starting balance"
             value={newAccBal} onChange={e => setNewAccBal(e.target.value)} />
           <button
-            className="px-2 py-1 bg-blue-600 text-white rounded whitespace-nowrap"
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg whitespace-nowrap transition-colors"
             onClick={() => {
               if (!newAccName.trim()) return;
               dispatch({ type: 'ADD_ACCOUNT', name: newAccName.trim(), startingBalance: parseFloat(newAccBal) || 0 });
@@ -849,53 +871,66 @@ function GroupCard({ group, monthKey, editBudget }) {
   const { state, dispatch } = useContext(BudgetContext);
   const cats = state.categories.filter(c => c.group === group);
 
-  let totalAssigned = 0, totalRemaining = 0;
+  const gs = GROUP_STYLE[group] || GROUP_STYLE.Needs;
+  const rows = cats.map(c => ({ c, row: computeCategoryHistory(state, c.id, monthKey) }));
+  const totalAssigned = rows.reduce((s, r) => s + r.row.assigned, 0);
+  const totalRemaining = rows.reduce((s, r) => s + r.row.remaining, 0);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-      <div className="px-3 py-1.5 bg-gray-800 text-white font-semibold text-sm tracking-wide">{group}</div>
-      <div className="flex items-center justify-end px-3 py-1 gap-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400 border-b bg-gray-50/60">
+    <div className="card overflow-hidden">
+      <div className="h-1" style={{ background: gs.bar }} />
+      <div className="px-3.5 pt-2.5 pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`w-7 h-7 rounded-lg ${gs.soft} grid place-items-center text-sm`}>{gs.emoji}</span>
+          <span className="font-bold text-[15px] text-slate-900 tracking-tight">{group}</span>
+        </div>
+        <div className="text-right leading-tight">
+          <div className={`text-[15px] font-bold tabular-nums ${moneyClass(totalRemaining)}`}>{fmt(totalRemaining)}</div>
+          <div className="text-[10.5px] text-slate-400 font-medium">left of {fmt(totalAssigned)}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-end px-3.5 pb-1 gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-100">
         <span className="w-16 shrink-0 text-right">Budgeted</span>
         <span className="w-20 shrink-0 text-right">Remaining</span>
       </div>
       <div>
-        {cats.map((c, i) => {
-          const row = computeCategoryHistory(state, c.id, monthKey);
-          totalAssigned += row.assigned; totalRemaining += row.remaining;
+        {rows.map(({ c, row }) => {
+          const available = row.carryIn + row.assigned;
+          const spent = -row.actual;
+          const over = row.remaining < -0.004;
+          const pct = over ? 100 : available > 0 ? Math.max(0, Math.min(100, (spent / available) * 100)) : 0;
+          const barColor = over ? '#ef4444' : pct > 85 ? '#f59e0b' : gs.bar;
           return (
-            <div
-              key={c.id}
-              className={`flex items-center justify-between px-3 py-1.5 border-b last:border-0 text-[13px] gap-2 ${i % 2 === 1 ? 'bg-gray-100/70' : ''} hover:bg-blue-50/60 transition-colors`}
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-semibold text-gray-800 leading-tight">{c.name}</div>
-                <div className="flex items-center gap-1 text-[11px] leading-tight">
-                  <span className="text-gray-400 shrink-0">carryover</span>
-                  <EditableMoney
-                    value={row.carryIn}
-                    onCommit={(n) => dispatch({ type: 'SET_CARRY_OVERRIDE', monthKey, categoryId: c.id, amount: n })}
-                    className={`w-16 ${row.carryIn === 0 ? 'text-gray-400' : moneyClass(row.carryIn)}`}
-                    editable={editBudget}
-                  />
+            <div key={c.id} className="px-3.5 py-1.5 border-b border-slate-100 last:border-0 text-[13px] hover:bg-slate-50/80 transition-colors">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold text-slate-800 leading-tight">{c.name}</div>
+                  <div className="flex items-center gap-1 text-[11px] leading-tight">
+                    <span className="text-slate-400 shrink-0">carryover</span>
+                    <EditableMoney
+                      value={row.carryIn}
+                      onCommit={(n) => dispatch({ type: 'SET_CARRY_OVERRIDE', monthKey, categoryId: c.id, amount: n })}
+                      className={`w-16 ${row.carryIn === 0 ? 'text-slate-400' : moneyClass(row.carryIn)}`}
+                      editable={editBudget}
+                    />
+                  </div>
                 </div>
+                <EditableMoney
+                  value={row.assigned}
+                  onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
+                  className="w-16 shrink-0 text-slate-500"
+                  editable={editBudget}
+                />
+                <span className={`w-20 shrink-0 text-right font-semibold tabular-nums rounded-md px-1.5 py-0.5 ${over ? 'bg-red-50 text-red-600' : moneyClass(row.remaining)}`}>{fmt(row.remaining)}</span>
               </div>
-              <EditableMoney
-                value={row.assigned}
-                onCommit={(n) => dispatch({ type: 'SET_ASSIGNED', monthKey, categoryId: c.id, amount: n })}
-                className="w-16 shrink-0 text-gray-600"
-                editable={editBudget}
-              />
-              <span className={`w-20 shrink-0 text-right font-semibold tabular-nums ${moneyClass(row.remaining)}`}>{fmt(row.remaining)}</span>
+              {(available > 0 || over) && (
+                <div className="bar mt-1" title={`${fmt(spent)} spent of ${fmt(available)} available`}>
+                  <span style={{ width: `${pct}%`, background: barColor }} />
+                </div>
+              )}
             </div>
           );
         })}
-      </div>
-      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-t-2 border-gray-200 font-semibold text-[13px]">
-        <span className="text-gray-700">Total</span>
-        <span className="flex items-center gap-2">
-          <span className="w-16 text-right tabular-nums text-gray-600">{fmt(totalAssigned)}</span>
-          <span className={`w-20 text-right tabular-nums ${moneyClass(totalRemaining)}`}>{fmt(totalRemaining)}</span>
-        </span>
       </div>
     </div>
   );
@@ -904,17 +939,20 @@ function GroupCard({ group, monthKey, editBudget }) {
 function BudgetView({ monthKey }) {
   const [editBudget, setEditBudget] = useState(false);
   return (
-    <div className="p-3 md:p-4 max-w-5xl">
-      <div className="flex items-center justify-between mb-2.5">
-        <h2 className="text-lg font-semibold text-gray-800">Budget</h2>
+    <div className="p-3 md:p-5 max-w-6xl">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Budget</h2>
+          <div className="text-xs text-slate-400 font-medium">{monthLabel(monthKey)}</div>
+        </div>
         <button
-          className={`px-2.5 py-1 rounded text-xs font-medium ${editBudget ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-sm ${editBudget ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'}`}
           onClick={() => setEditBudget(v => !v)}
         >
-          {editBudget ? 'Done Editing' : 'Edit Budgeted Amounts'}
+          {editBudget ? '✓ Done Editing' : '✎ Edit Budgeted Amounts'}
         </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {GROUPS.map(g => <GroupCard key={g} group={g} monthKey={monthKey} editBudget={editBudget} />)}
       </div>
     </div>
@@ -927,14 +965,15 @@ function ManageCategoriesGroup({ group }) {
   const cats = state.categories.filter(c => c.group === group);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-      <div className="px-3 py-1.5 bg-gray-800 text-white font-semibold text-sm tracking-wide">{group}</div>
+    <div className="card overflow-hidden">
+      <div className="h-1" style={{ background: (GROUP_STYLE[group] || {}).bar || '#64748b' }} />
+      <div className="px-3.5 py-2 font-bold text-[15px] text-slate-900 tracking-tight border-b border-slate-100 flex items-center gap-2"><span>{(GROUP_STYLE[group] || {}).emoji || '📁'}</span>{group}</div>
       {cats.map((c, i) => (
-        <div key={c.id} className={`flex items-center justify-between px-3 py-1.5 border-b last:border-0 text-[13px] gap-2 ${i % 2 === 1 ? 'bg-gray-100/70' : ''} hover:bg-blue-50/60 transition-colors`}>
-          <span className="truncate flex-1 font-semibold text-gray-800">{c.name}</span>
+        <div key={c.id} className={`flex items-center justify-between px-3 py-1.5 border-b last:border-0 text-[13px] gap-2 ${''} hover:bg-indigo-50/60 transition-colors`}>
+          <span className="truncate flex-1 font-semibold text-slate-800">{c.name}</span>
           <span className="flex items-center gap-2 shrink-0">
-            <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
-            <button className="text-gray-400 hover:text-gray-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
+            <button className="text-slate-400 hover:text-slate-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'up' })}>▲</button>
+            <button className="text-slate-400 hover:text-slate-700 px-1" onClick={() => dispatch({ type: 'MOVE_CATEGORY', id: c.id, direction: 'down' })}>▼</button>
             <button
               className="text-blue-500 hover:underline px-1"
               onClick={() => {
@@ -967,7 +1006,7 @@ function ManageCategoriesGroup({ group }) {
           }}
         />
         <button
-          className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-sm"
+          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-sm"
           onClick={() => { if (newCat.trim()) { dispatch({ type: 'ADD_CATEGORY', group, name: newCat.trim() }); setNewCat(''); } }}
         >+</button>
       </div>
@@ -977,8 +1016,8 @@ function ManageCategoriesGroup({ group }) {
 
 function ManageCategoriesView() {
   return (
-    <div className="p-3 md:p-4 grid grid-cols-1 md:grid-cols-2 gap-3 max-w-5xl">
-      <h2 className="text-lg font-semibold text-gray-800 col-span-full mb-0">Manage Categories</h2>
+    <div className="p-3 md:p-5 grid grid-cols-1 md:grid-cols-2 gap-3 max-w-5xl">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight col-span-full mb-0">Manage Categories</h2>
       {GROUPS.map(g => <ManageCategoriesGroup key={g} group={g} />)}
       <ManageCategoriesGroup group="Deposits" />
     </div>
@@ -1036,7 +1075,7 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
       <td className="px-2 py-1"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="border rounded px-1 py-0.5 text-sm w-full" /></td>
       <td className="px-2 py-1">
         {group === 'Transfer'
-          ? <span className="text-gray-400 text-sm italic">Transfer</span>
+          ? <span className="text-slate-400 text-sm italic">Transfer</span>
           : <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description" className="border rounded px-1 py-0.5 text-sm w-full" />}
       </td>
       <td className="px-2 py-1"><input value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" className="border rounded px-1 py-0.5 text-sm w-full text-right" /></td>
@@ -1061,8 +1100,8 @@ function TxEditorRow({ accountId, initial, onSubmit, onCancel, submitLabel }) {
       <td className="px-2 py-1"><input value={memo} onChange={e => setMemo(e.target.value)} placeholder="Memo" className="border rounded px-1 py-0.5 text-sm w-full" /></td>
       <td className="px-2 py-1"></td>
       <td className="px-2 py-1 whitespace-nowrap">
-        <button onClick={submit} className="px-2 py-0.5 bg-blue-600 text-white rounded text-sm">{submitLabel}</button>
-        {onCancel && <button onClick={onCancel} className="px-2 py-0.5 ml-1 bg-gray-100 rounded text-sm">Cancel</button>}
+        <button onClick={submit} className="px-2 py-0.5 bg-indigo-600 text-white rounded text-sm">{submitLabel}</button>
+        {onCancel && <button onClick={onCancel} className="px-2 py-0.5 ml-1 bg-slate-100 rounded text-sm">Cancel</button>}
       </td>
     </tr>
   );
@@ -1138,17 +1177,17 @@ function PlaidSetupModal({ onClose }) {
       <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold mb-4">Setup Plaid Bank Sync</h3>
         <div className="space-y-3 text-sm">
-          <p className="text-gray-600">Get credentials from <strong>dashboard.plaid.com</strong>. Use <em>Sandbox</em> to test without a real bank.</p>
+          <p className="text-slate-600">Get credentials from <strong>dashboard.plaid.com</strong>. Use <em>Sandbox</em> to test without a real bank.</p>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Client ID</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Client ID</label>
             <input autoFocus value={clientId} onChange={e => setClientId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Plaid client_id" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Secret</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Secret</label>
             <input type="password" value={secret} onChange={e => setSecret(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Plaid secret" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Environment</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Environment</label>
             <select value={env} onChange={e => setEnv(e.target.value)} className="w-full border rounded px-3 py-2 text-sm bg-white">
               <option value="sandbox">Sandbox (test)</option>
               <option value="development">Development</option>
@@ -1156,8 +1195,8 @@ function PlaidSetupModal({ onClose }) {
             </select>
           </div>
           <div className="flex gap-3 pt-2">
-            <button onClick={onClose} className="flex-1 border rounded py-2 text-gray-600 hover:bg-gray-50">Cancel</button>
-            <button onClick={save} disabled={saving || !clientId || !secret} className="flex-1 bg-blue-600 text-white rounded py-2 font-medium hover:bg-blue-700 disabled:opacity-40">
+            <button onClick={onClose} className="flex-1 border rounded py-2 text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button onClick={save} disabled={saving || !clientId || !secret} className="flex-1 bg-indigo-600 text-white rounded py-2 font-medium hover:bg-indigo-700 disabled:opacity-40">
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -1230,7 +1269,7 @@ function BankSyncBar({ account }) {
 
   if (!status) {
     return (
-      <div className="px-4 py-2 border-b bg-gray-50 text-xs text-gray-400 flex items-center gap-2">
+      <div className="px-4 py-2 border-b bg-slate-50 text-xs text-slate-400 flex items-center gap-2">
         <span>Bank sync server not detected.</span>
         <button onClick={() => setShowSetup(true)} className="text-blue-600 hover:underline">Configure Plaid</button>
         {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
@@ -1239,27 +1278,27 @@ function BankSyncBar({ account }) {
   }
   if (!status.configured) {
     return (
-      <div className="px-4 py-2 border-b bg-gray-50 flex items-center gap-3 text-sm">
-        <span className="text-gray-500">Bank sync not configured.</span>
+      <div className="px-4 py-2 border-b bg-slate-50 flex items-center gap-3 text-sm">
+        <span className="text-slate-500">Bank sync not configured.</span>
         <button onClick={() => setShowSetup(true)} className="text-blue-600 hover:underline">Setup Plaid</button>
         {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
       </div>
     );
   }
   return (
-    <div className="px-4 py-2 border-b bg-gray-50 flex items-center gap-3 text-sm">
+    <div className="px-4 py-2 border-b bg-slate-50 flex items-center gap-3 text-sm">
       {connected ? (
         <>
           <span className="text-emerald-600 font-medium">✓ Bank Connected</span>
-          <button onClick={sync} disabled={syncing} className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50 text-xs">
+          <button onClick={sync} disabled={syncing} className="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 disabled:opacity-50 text-xs">
             {syncing ? 'Syncing…' : 'Sync Now'}
           </button>
           <button onClick={disconnect} className="text-red-500 hover:underline text-xs">Disconnect</button>
         </>
       ) : (
         <>
-          <span className="text-gray-500">No bank connected.</span>
-          <button onClick={connect} className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Connect Bank</button>
+          <span className="text-slate-500">No bank connected.</span>
+          <button onClick={connect} className="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 text-xs">Connect Bank</button>
         </>
       )}
       {showSetup && <PlaidSetupModal onClose={() => { setShowSetup(false); checkStatus(); }} />}
@@ -1286,11 +1325,11 @@ function CsvImportButton({ accountId }) {
   }
 
   return (
-    <div className="px-4 py-2 border-b bg-gray-50 flex items-center gap-3 text-sm">
-      <span className="text-gray-500">Import your bank's CSV export:</span>
+    <div className="px-4 py-2 border-b bg-slate-50 flex items-center gap-3 text-sm">
+      <span className="text-slate-500">Import your bank's CSV export:</span>
       <button
         onClick={() => fileRef.current && fileRef.current.click()}
-        className="bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-800 text-xs"
+        className="bg-slate-700 text-white px-3 py-1 rounded hover:bg-slate-800 text-xs"
       >Choose CSV file</button>
       <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
     </div>
@@ -1349,10 +1388,10 @@ function RegisterView({ accountId }) {
   }
 
   return (
-    <div className="p-3 md:p-4">
-      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">{account ? account.name : 'Account'}</h2>
+    <div className="p-3 md:p-5">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-0.5">{account ? account.name : 'Account'}</h2>
       <div className={`mb-2.5 text-base font-semibold tabular-nums ${moneyClass(accountBalance(state, accountId))}`}>{fmt(accountBalance(state, accountId))}</div>
-      <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <div className="card overflow-x-auto">
         {account && <BankSyncBar account={account} />}
         <CsvImportButton accountId={accountId} />
         <table className="w-full text-[13px] table-fixed">
@@ -1367,7 +1406,7 @@ function RegisterView({ accountId }) {
             <col className="w-[12%]" />
           </colgroup>
           <thead>
-            <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
+            <tr className="text-slate-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-slate-50/60">
               <th className="text-left px-2 py-1.5 font-semibold">Date</th>
               <th className="text-left px-2 py-1.5 font-semibold">Description</th>
               <th className="text-right px-2 py-1.5 font-semibold">Amount</th>
@@ -1391,21 +1430,21 @@ function RegisterView({ accountId }) {
                   submitLabel="Save"
                 />
               ) : (
-                <tr key={t.id} className={`border-b last:border-0 hover:bg-blue-50/60 transition-colors group ${!t.group ? 'bg-orange-50' : i % 2 === 1 ? 'bg-gray-100/70' : ''}`}>
+                <tr key={t.id} className={`border-b last:border-0 hover:bg-indigo-50/60 transition-colors group ${!t.group ? 'bg-orange-50' : ''}`}>
                   <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
-                  <td className="px-2 py-1 font-medium text-gray-800 truncate" title={t.description}>{t.description}</td>
+                  <td className="px-2 py-1 font-medium text-slate-800 truncate" title={t.description}>{t.description}</td>
                   <td className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
                   <td className="px-2 py-1 truncate">{t.group || '—'}</td>
                   <td className={`px-2 py-1 truncate ${!t.group ? 'text-orange-600 font-medium' : ''}`} title={catName(t)}>{catName(t)}</td>
-                  <td className="px-2 py-1 text-gray-500 truncate" title={t.memo}>{t.memo}</td>
+                  <td className="px-2 py-1 text-slate-500 truncate" title={t.memo}>{t.memo}</td>
                   <td className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${moneyClass(t.balance)}`}>{fmt(t.balance)}</td>
                   <td className="px-2 py-1 whitespace-nowrap">
                     <button
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-blue-500 text-xs mr-2"
+                      className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-blue-500 text-xs mr-2"
                       onClick={() => setEditingId(t.id)}
                     >edit</button>
                     <button
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 text-xs"
+                      className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 text-xs"
                       onClick={() => dispatch({ type: 'DELETE_TRANSACTION', id: t.id })}
                     >✕</button>
                   </td>
@@ -1448,7 +1487,7 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
   }
 
   const skipLink = (
-    <button className="text-xs text-gray-400 hover:text-gray-600 hover:underline" onClick={onSkip}>
+    <button className="text-xs text-slate-400 hover:text-slate-600 hover:underline" onClick={onSkip}>
       Skip — come back to this later
     </button>
   );
@@ -1464,25 +1503,25 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
   }
 
   const rememberToggle = (
-    <label className="flex items-center gap-1.5 justify-center text-xs text-gray-500 cursor-pointer">
+    <label className="flex items-center gap-1.5 justify-center text-xs text-slate-500 cursor-pointer">
       <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
       Always do this for "{merchantKey}"
     </label>
   );
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-4 max-w-md mx-auto">
+    <div className="card p-4 max-w-md mx-auto">
       <div className="text-center mb-3">
-        <div className="font-semibold text-gray-800">{t.description}</div>
-        <div className="text-xs text-gray-500 mt-0.5">{t.date} · {accName}</div>
+        <div className="font-semibold text-slate-800">{t.description}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{t.date} · {accName}</div>
         <div className={`text-xl font-semibold tabular-nums mt-1 ${moneyClass(t.amount)}`}>{fmt(t.amount)}</div>
-        {wasSkipped && <div className="text-[11px] text-gray-400 mt-1">You skipped this one before</div>}
+        {wasSkipped && <div className="text-[11px] text-slate-400 mt-1">You skipped this one before</div>}
         <input
           value={memo}
           onChange={e => setMemo(e.target.value)}
           onBlur={saveMemo}
           placeholder="Add a memo..."
-          className="mt-2 w-full border rounded px-2 py-1 text-xs text-center text-gray-600"
+          className="mt-2 w-full border rounded px-2 py-1 text-xs text-center text-slate-600"
         />
       </div>
 
@@ -1490,7 +1529,7 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
         <div>
           <button
             onClick={() => apply(suggestion.categoryId)}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 mb-2"
+            className="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 mb-2"
           >
             {suggestion.group} → {suggestion.categoryName}
           </button>
@@ -1507,18 +1546,18 @@ function ReviewCard({ t, onSkip, wasSkipped }) {
               <button
                 key={g}
                 onClick={() => setGroup(g)}
-                className={`px-3 py-1.5 rounded-full text-sm font-medium border ${group === g ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium border ${group === g ? 'bg-indigo-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
               >{g}</button>
             ))}
           </div>
           <div className="flex flex-wrap gap-1.5 justify-center mb-3">
             {catOptions.length === 0 ? (
-              <div className="text-xs text-gray-400">No categories in {group} yet — add one from Manage Categories.</div>
+              <div className="text-xs text-slate-400">No categories in {group} yet — add one from Manage Categories.</div>
             ) : catOptions.map(c => (
               <button
                 key={c.id}
                 onClick={() => apply(c.id)}
-                className="px-3 py-1.5 rounded-full text-sm font-medium border bg-white text-gray-700 border-gray-300 hover:bg-blue-50 hover:border-blue-300"
+                className="px-3 py-1.5 rounded-full text-sm font-medium border bg-white text-slate-700 border-slate-300 hover:bg-blue-50 hover:border-blue-300"
               >{c.name}</button>
             ))}
           </div>
@@ -1542,15 +1581,15 @@ function TransferMatchCard({ outTx, inTx }) {
   return (
     <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 flex items-center justify-between gap-3">
       <div className="min-w-0 text-[13px]">
-        <div className="font-semibold text-gray-800 mb-0.5">Looks like a transfer between your accounts</div>
-        <div className="text-gray-600 tabular-nums">
+        <div className="font-semibold text-slate-800 mb-0.5">Looks like a transfer between your accounts</div>
+        <div className="text-slate-600 tabular-nums">
           {accName(outTx.accountId)} <span className="text-red-600">{fmt(outTx.amount)}</span> ({outTx.date})
-          <span className="text-gray-400 mx-1.5">→</span>
+          <span className="text-slate-400 mx-1.5">→</span>
           {accName(inTx.accountId)} <span className="text-emerald-700">{fmt(inTx.amount)}</span> ({inTx.date})
         </div>
       </div>
       <button
-        className="shrink-0 px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700"
+        className="shrink-0 px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700"
         onClick={() => dispatch({ type: 'MERGE_TO_TRANSFER', idA: outTx.id, idB: inTx.id })}
       >
         Merge into Transfer
@@ -1572,14 +1611,14 @@ function DuplicateMatchCard({ pair }) {
 
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
-      <div className="font-semibold text-gray-800 mb-1.5 text-[13px]">
+      <div className="font-semibold text-slate-800 mb-1.5 text-[13px]">
         Possible duplicate — {a.amount === b.amount ? `both ${fmt(a.amount)}` : `${fmt(a.amount)} / ${fmt(b.amount)}`} in {accName(a.accountId)}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
         {[a, b].map(t => (
           <div key={t.id} className="bg-white border rounded px-2 py-1.5 text-[12px] min-w-0">
-            <div className="text-gray-700 truncate">{t.date} — {t.description || '(no description)'}</div>
-            <div className="text-gray-400">{label(t)}</div>
+            <div className="text-slate-700 truncate">{t.date} — {t.description || '(no description)'}</div>
+            <div className="text-slate-400">{label(t)}</div>
           </div>
         ))}
       </div>
@@ -1597,7 +1636,7 @@ function DuplicateMatchCard({ pair }) {
           Keep {b.date} entry, delete the other
         </button>
         <button
-          className="px-2.5 py-1 bg-white border text-gray-600 rounded text-xs font-medium hover:bg-gray-50"
+          className="px-2.5 py-1 bg-white border text-slate-600 rounded text-xs font-medium hover:bg-slate-50"
           onClick={() => dispatch({ type: 'DISMISS_DUPLICATE', key })}
         >
           Not a duplicate
@@ -1612,10 +1651,10 @@ function StalePlaceholderCard({ tx }) {
   const accName = (state.accounts.find(a => a.id === tx.accountId) || {}).name || '—';
   return (
     <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-2">
-      <div className="font-semibold text-gray-800 mb-1 text-[13px]">
+      <div className="font-semibold text-slate-800 mb-1 text-[13px]">
         Stale pending charge — {fmt(tx.amount)} in {accName}
       </div>
-      <div className="text-[12px] text-gray-600 mb-2">
+      <div className="text-[12px] text-slate-600 mb-2">
         {tx.date} — “{tx.description}” never posted under a real merchant name. Usually a card hold the bank released without charging.
       </div>
       <button
@@ -1633,15 +1672,15 @@ function DuplicatesView() {
   const pairs = findDuplicateCandidates(state);
   const stale = findStalePlaceholders(state);
   return (
-    <div className="p-3 md:p-4">
-      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Possible Duplicates</h2>
-      <p className="text-xs text-gray-500 mb-2.5">Same amount, same account, close together in time — usually a pending bank charge that later posted a second time under its real name/date.</p>
+    <div className="p-3 md:p-5">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-0.5">Possible Duplicates</h2>
+      <p className="text-xs text-slate-500 mb-2.5">Same amount, same account, close together in time — usually a pending bank charge that later posted a second time under its real name/date.</p>
       {pairs.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">No possible duplicates found.</div>
+        <div className="card p-6 text-center text-slate-400">No possible duplicates found.</div>
       ) : pairs.map(p => <DuplicateMatchCard key={p.key} pair={p} />)}
       {stale.length > 0 && (
         <>
-          <h3 className="text-sm font-semibold text-gray-800 mt-4 mb-2">Stale pending charges ({stale.length})</h3>
+          <h3 className="text-sm font-semibold text-slate-800 mt-4 mb-2">Stale pending charges ({stale.length})</h3>
           {stale.map(t => <StalePlaceholderCard key={t.id} tx={t} />)}
         </>
       )}
@@ -1672,13 +1711,13 @@ function RulesPanel() {
         className="text-xs text-blue-600 hover:underline"
       >{open ? 'Hide' : 'Manage'} rules{rules.length ? ` (${rules.length})` : ''}</button>
       {open && (
-        <div className="bg-white rounded-lg shadow-sm border p-2.5 mt-1.5">
+        <div className="card p-2.5 mt-1.5">
           {rules.length > 0 && (
             <div className="mb-2 space-y-1">
               {rules.map(r => {
                 const cat = state.categories.find(c => c.id === r.categoryId);
                 return (
-                  <div key={r.id} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                  <div key={r.id} className="flex items-center justify-between text-xs bg-slate-50 rounded px-2 py-1">
                     <span>contains <span className="font-semibold">"{r.match}"</span> → <span className="font-semibold">{cat ? cat.name : '—'}</span></span>
                     <button className="text-red-500 hover:underline" onClick={() => dispatch({ type: 'DELETE_RULE', id: r.id })}>remove</button>
                   </div>
@@ -1700,9 +1739,9 @@ function RulesPanel() {
               <option value="">— category —</option>
               {catOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            <button onClick={addRule} className="px-2.5 py-1 bg-blue-600 text-white rounded text-sm">Add Rule</button>
+            <button onClick={addRule} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-sm">Add Rule</button>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Applies immediately to matching uncategorized transactions below, and automatically to new imports going forward.</div>
+          <div className="text-[11px] text-slate-400 mt-1">Applies immediately to matching uncategorized transactions below, and automatically to new imports going forward.</div>
         </div>
       )}
     </div>
@@ -1780,9 +1819,9 @@ function CategorizeView() {
   const skippedCount = rows.filter(t => skipped.has(t.id)).length;
 
   return (
-    <div className="p-3 md:p-4">
-      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Needs Categorizing</h2>
-      <p className="text-xs text-gray-500 mb-2.5">
+    <div className="p-3 md:p-5">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-0.5">Needs Categorizing</h2>
+      <p className="text-xs text-slate-500 mb-2.5">
         {rows.length === 0 ? 'One at a time — confirm or pick, then the next one shows up.' : `${rows.length} left${skippedCount ? ` (${skippedCount} skipped for later)` : ''}`}
         {rows.length > 0 && (
           <>
@@ -1795,13 +1834,13 @@ function CategorizeView() {
       </p>
       <RulesPanel />
       {showList && rows.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border mb-3 divide-y max-h-64 overflow-y-auto">
+        <div className="card mb-3 divide-y max-h-64 overflow-y-auto">
           {rows.map(t => {
             const acc = state.accounts.find(a => a.id === t.accountId);
             return (
               <div key={t.id} className="flex items-center justify-between px-2.5 py-1.5 text-xs gap-2">
                 <span className="truncate flex-1 min-w-0">{t.description}</span>
-                <span className="text-gray-400 whitespace-nowrap">{t.date}{acc ? ` · ${acc.name}` : ''}</span>
+                <span className="text-slate-400 whitespace-nowrap">{t.date}{acc ? ` · ${acc.name}` : ''}</span>
                 <span className={`font-semibold whitespace-nowrap ${moneyClass(t.amount)}`}>{fmt(t.amount)}</span>
               </div>
             );
@@ -1816,7 +1855,7 @@ function CategorizeView() {
         </div>
       )}
       {!current ? (
-        <div className="bg-white rounded-lg shadow-sm border p-6 text-center text-gray-400">All caught up — nothing left to categorize.</div>
+        <div className="card p-6 text-center text-slate-400">All caught up — nothing left to categorize.</div>
       ) : (
         <ReviewCard key={current.id} t={current} onSkip={() => skip(current.id)} wasSkipped={skipped.has(current.id)} />
       )}
@@ -1856,7 +1895,7 @@ function MemoCell({ t }) {
     <span
       onClick={e => { e.stopPropagation(); setEditing(true); }}
       title={t.memo || 'Add a memo'}
-      className={`block truncate cursor-text hover:underline decoration-dotted ${t.memo ? 'text-gray-600' : 'text-gray-300 italic'}`}
+      className={`block truncate cursor-text hover:underline decoration-dotted ${t.memo ? 'text-slate-600' : 'text-slate-300 italic'}`}
     >
       {t.memo || 'add memo'}
     </span>
@@ -1892,10 +1931,10 @@ function AllAccountsView({ setView }) {
   const hasFilter = categoryFilter || dateFrom || dateTo;
 
   return (
-    <div className="p-3 md:p-4">
-      <h2 className="text-lg font-semibold text-gray-800 mb-2.5">All Accounts</h2>
+    <div className="p-3 md:p-5">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-2.5">All Accounts</h2>
       <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        <label className="text-xs text-gray-500">Category:</label>
+        <label className="text-xs text-slate-500">Category:</label>
         <select
           value={categoryFilter}
           onChange={e => setCategoryFilter(e.target.value)}
@@ -1915,14 +1954,14 @@ function AllAccountsView({ setView }) {
             );
           })}
         </select>
-        <label className="text-xs text-gray-500 ml-1">From:</label>
+        <label className="text-xs text-slate-500 ml-1">From:</label>
         <input
           type="date"
           value={dateFrom}
           onChange={e => setDateFrom(e.target.value)}
           className="border rounded px-2 py-1 text-sm bg-white"
         />
-        <label className="text-xs text-gray-500">To:</label>
+        <label className="text-xs text-slate-500">To:</label>
         <input
           type="date"
           value={dateTo}
@@ -1936,16 +1975,16 @@ function AllAccountsView({ setView }) {
           >clear dates</button>
         )}
         {hasFilter && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-slate-500">
             {rows.length} transaction{rows.length === 1 ? '' : 's'} · total{' '}
             <span className={`font-semibold tabular-nums ${moneyClass(filteredTotal)}`}>{fmt(filteredTotal)}</span>
           </span>
         )}
       </div>
-      <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <div className="card overflow-x-auto">
         <table className="w-full text-[13px]">
           <thead>
-            <tr className="text-gray-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-gray-50/60">
+            <tr className="text-slate-400 text-[10px] font-semibold uppercase tracking-wide border-b bg-slate-50/60">
               <th className="text-left px-2 py-1.5 font-semibold">Date</th>
               <th className="text-left px-2 py-1.5 font-semibold">Account</th>
               <th className="text-left px-2 py-1.5 font-semibold">Description</th>
@@ -1959,20 +1998,20 @@ function AllAccountsView({ setView }) {
             {rows.map((t, i) => (
               <tr
                 key={t.id}
-                className={`border-b last:border-0 hover:bg-blue-50/60 transition-colors cursor-pointer ${!t.group ? 'bg-orange-50' : i % 2 === 1 ? 'bg-gray-100/70' : ''}`}
+                className={`border-b last:border-0 hover:bg-indigo-50/60 transition-colors cursor-pointer ${!t.group ? 'bg-orange-50' : ''}`}
                 onClick={() => setView({ type: 'register', accountId: t.accountId })}
               >
                 <td className="px-2 py-1 whitespace-nowrap">{t.date}</td>
-                <td className="px-2 py-1">{accName(t.accountId)}</td>
-                <td className="px-2 py-1 font-medium text-gray-800">{t.description}</td>
+                <td className="px-2 py-1 whitespace-nowrap text-slate-500">{accName(t.accountId)}</td>
+                <td className="px-2 py-1 font-medium text-slate-800">{t.description}</td>
                 <td className={`px-2 py-1 text-right tabular-nums ${moneyClass(t.amount)}`}>{fmt(t.amount)}</td>
-                <td className="px-2 py-1">{t.group || '—'}</td>
-                <td className={`px-2 py-1 ${!t.group ? 'text-orange-600 font-medium' : ''}`}>{catName(t)}</td>
+                <td className="px-2 py-1">{t.group ? <span className="inline-flex items-center gap-1.5 text-slate-600"><span className={`w-1.5 h-1.5 rounded-full ${(GROUP_STYLE[t.group] || {}).dot || 'bg-slate-400'}`} />{t.group}</span> : <span className="text-slate-300">—</span>}</td>
+                <td className="px-2 py-1">{!t.group ? <span className="inline-block bg-orange-100 text-orange-700 font-semibold text-[11.5px] rounded-full px-2 py-0.5 whitespace-nowrap">{catName(t)}</span> : catName(t)}</td>
                 <td className="px-2 py-1 max-w-[160px]" onClick={e => e.stopPropagation()}><MemoCell t={t} /></td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan="7" className="px-2 py-6 text-center text-gray-400">
+              <tr><td colSpan="7" className="px-2 py-6 text-center text-slate-400">
                 {categoryFilter ? 'No transactions in this category' : 'No transactions yet'}
               </td></tr>
             )}
@@ -2009,12 +2048,13 @@ function DebtCard({ debt }) {
   const result = useMemo(() => computePayoff(currentBalance, debt.apr, paymentNum), [currentBalance, debt.apr, paymentNum]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-      <div className="px-3 py-1.5 bg-gray-800 text-white font-semibold text-sm tracking-wide flex items-center justify-between">
-        <span className="truncate">{debt.name}</span>
+    <div className="card overflow-hidden">
+      <div className="h-1 bg-pink-500" />
+      <div className="px-3.5 py-2 font-bold text-[15px] text-slate-900 tracking-tight border-b border-slate-100 flex items-center justify-between">
+        <span className="truncate">💳 {debt.name}</span>
         <span className="flex items-center gap-2 shrink-0 text-xs">
           <button
-            className="text-gray-300 hover:text-white"
+            className="text-slate-400 hover:text-indigo-600 font-medium"
             onClick={() => {
               const name = window.prompt('Debt name', debt.name);
               if (!name || !name.trim()) return;
@@ -2027,14 +2067,14 @@ function DebtCard({ debt }) {
             }}
           >edit</button>
           <button
-            className="text-gray-300 hover:text-red-400"
+            className="text-slate-400 hover:text-red-500"
             onClick={() => { if (window.confirm(`Delete "${debt.name}"?`)) dispatch({ type: 'DELETE_DEBT', id: debt.id }); }}
           >✕</button>
         </span>
       </div>
       <div className="p-2.5 text-[13px] space-y-1.5">
         <div className="flex justify-between">
-          <span className="text-gray-500">Balance owed</span>
+          <span className="text-slate-500">Balance owed</span>
           <span className="font-semibold tabular-nums">{fmt(currentBalance)}</span>
         </div>
         {paidSoFar !== 0 && (
@@ -2044,11 +2084,11 @@ function DebtCard({ debt }) {
           </div>
         )}
         <div className="flex justify-between">
-          <span className="text-gray-500">Interest rate (APR)</span>
+          <span className="text-slate-500">Interest rate (APR)</span>
           <span className="font-semibold tabular-nums">{debt.apr}%</span>
         </div>
         <div className="pt-1.5 border-t">
-          <label className="text-gray-500 text-[11px] block mb-0.5">Monthly payment</label>
+          <label className="text-slate-500 text-[11px] block mb-0.5">Monthly payment</label>
           <input
             type="text"
             className="w-full border rounded px-2 py-1 text-[13px] tabular-nums"
@@ -2066,10 +2106,10 @@ function DebtCard({ debt }) {
           result.neverPaysOff ? (
             <div className="text-red-600 text-[13px]">That payment will never pay off this balance at {debt.apr}% APR — try a higher amount.</div>
           ) : (
-            <div className="bg-gray-50 rounded px-2.5 py-1.5 text-[13px] space-y-1">
-              <div className="flex justify-between"><span className="text-gray-500">Paid off in</span><span className="font-semibold tabular-nums">{result.months} months ({Math.floor(result.months / 12)}y {result.months % 12}m)</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total interest paid</span><span className="font-semibold text-red-600 tabular-nums">{fmt(result.totalInterest)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total paid</span><span className="font-semibold tabular-nums">{fmt(currentBalance + result.totalInterest)}</span></div>
+            <div className="bg-slate-50 rounded px-2.5 py-1.5 text-[13px] space-y-1">
+              <div className="flex justify-between"><span className="text-slate-500">Paid off in</span><span className="font-semibold tabular-nums">{result.months} months ({Math.floor(result.months / 12)}y {result.months % 12}m)</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Total interest paid</span><span className="font-semibold text-red-600 tabular-nums">{fmt(result.totalInterest)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Total paid</span><span className="font-semibold tabular-nums">{fmt(currentBalance + result.totalInterest)}</span></div>
             </div>
           )
         )}
@@ -2086,16 +2126,16 @@ function DebtsView() {
   const total = state.debts.reduce((s, d) => s + debtCurrentBalance(state, d), 0);
 
   return (
-    <div className="p-3 md:p-4 max-w-5xl">
-      <h2 className="text-lg font-semibold text-gray-800 mb-0.5">Debts</h2>
-      <div className="text-xs text-gray-500 mb-2.5">Total owed: <span className="font-semibold text-red-600 tabular-nums">{fmt(total)}</span></div>
+    <div className="p-3 md:p-5 max-w-5xl">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-0.5">Debts</h2>
+      <div className="text-xs text-slate-500 mb-2.5">Total owed: <span className="font-semibold text-red-600 tabular-nums">{fmt(total)}</span></div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
         {state.debts.map(d => <DebtCard key={d.id} debt={d} />)}
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border p-3 max-w-md">
-        <div className="font-semibold mb-1.5 text-[13px] text-gray-800">Add a debt</div>
+      <div className="card p-3 max-w-md">
+        <div className="font-semibold mb-1.5 text-[13px] text-slate-800">Add a debt</div>
         <div className="space-y-1.5">
           <input className="w-full border rounded px-2 py-1 text-[13px]" placeholder="Name (e.g. Auto Loan)"
             value={name} onChange={e => setName(e.target.value)} />
@@ -2104,7 +2144,7 @@ function DebtsView() {
           <input className="w-full border rounded px-2 py-1 text-[13px]" placeholder="Interest rate (APR %)"
             value={apr} onChange={e => setApr(e.target.value)} />
           <button
-            className="px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-medium"
+            className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium"
             onClick={() => {
               if (!name.trim()) return;
               const bal = parseFloat(balance) || 0;
@@ -2156,49 +2196,49 @@ function ReportsView({ monthKey }) {
   const maxIncomeAmt = incomeRows.length ? incomeRows[0].amt : 0;
 
   return (
-    <div className="p-3 md:p-4 max-w-3xl">
-      <h2 className="text-lg font-semibold text-gray-800 mb-2.5">Reports — {monthLabel(monthKey)}</h2>
+    <div className="p-3 md:p-5 max-w-3xl">
+      <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-2.5">Reports — {monthLabel(monthKey)}</h2>
       <div className="grid grid-cols-3 gap-3 mb-3">
-        <div className="bg-white rounded-lg shadow-sm border p-2.5">
-          <div className="text-[11px] text-gray-500">Income</div>
+        <div className="card p-2.5">
+          <div className="text-[11px] text-slate-500">Income</div>
           <div className="text-base font-semibold text-emerald-700 tabular-nums">{fmt(income)}</div>
         </div>
-        <div className="bg-white rounded-lg shadow-sm border p-2.5">
-          <div className="text-[11px] text-gray-500">Expenses</div>
+        <div className="card p-2.5">
+          <div className="text-[11px] text-slate-500">Expenses</div>
           <div className="text-base font-semibold text-red-600 tabular-nums">{fmt(-expense)}</div>
         </div>
-        <div className="bg-white rounded-lg shadow-sm border p-2.5">
-          <div className="text-[11px] text-gray-500">Net</div>
+        <div className="card p-2.5">
+          <div className="text-[11px] text-slate-500">Net</div>
           <div className={`text-base font-semibold tabular-nums ${moneyClass(net)}`}>{fmt(net)}</div>
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border p-3 mb-3">
-        <div className="font-semibold text-gray-800 text-[13px] mb-2">Income by Source</div>
-        {incomeRows.length === 0 && <div className="text-gray-400 text-[13px]">No income recorded this month</div>}
+      <div className="card p-3 mb-3">
+        <div className="font-semibold text-slate-800 text-[13px] mb-2">Income by Source</div>
+        {incomeRows.length === 0 && <div className="text-slate-400 text-[13px]">No income recorded this month</div>}
         {incomeRows.map(r => (
           <div key={r.name} className="mb-1.5">
             <div className="flex justify-between text-[13px] mb-0.5">
-              <span className={`font-medium ${r.name === 'Uncategorized' ? 'text-orange-600' : 'text-gray-800'}`}>{r.name}</span>
+              <span className={`font-medium ${r.name === 'Uncategorized' ? 'text-orange-600' : 'text-slate-800'}`}>{r.name}</span>
               <span className="font-medium tabular-nums text-emerald-700">{fmt(r.amt)}</span>
             </div>
-            <div className="h-1.5 bg-gray-100 rounded">
+            <div className="h-1.5 bg-slate-100 rounded">
               <div className="h-1.5 bg-emerald-500 rounded" style={{ width: `${maxIncomeAmt ? (r.amt / maxIncomeAmt) * 100 : 0}%` }}></div>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border p-3">
-        <div className="font-semibold text-gray-800 text-[13px] mb-2">Spending by Category</div>
-        {catRows.length === 0 && <div className="text-gray-400 text-[13px]">No spending recorded this month</div>}
+      <div className="card p-3">
+        <div className="font-semibold text-slate-800 text-[13px] mb-2">Spending by Category</div>
+        {catRows.length === 0 && <div className="text-slate-400 text-[13px]">No spending recorded this month</div>}
         {catRows.map(r => (
           <div key={r.name} className="mb-1.5">
             <div className="flex justify-between text-[13px] mb-0.5">
-              <span className="font-medium text-gray-800">{r.name} <span className="text-gray-400 font-normal">({r.group})</span></span>
+              <span className="font-medium text-slate-800">{r.name} <span className="text-slate-400 font-normal">({r.group})</span></span>
               <span className="font-medium tabular-nums">{fmt(r.amt)}</span>
             </div>
-            <div className="h-1.5 bg-gray-100 rounded">
+            <div className="h-1.5 bg-slate-100 rounded">
               <div className="h-1.5 bg-blue-500 rounded" style={{ width: `${maxAmt ? (r.amt / maxAmt) * 100 : 0}%` }}></div>
             </div>
           </div>
@@ -2218,13 +2258,13 @@ function ReportsView({ monthKey }) {
 function UndoToast({ info, onDismiss }) {
   if (!info) return null;
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 text-[13px]">
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 text-[13px]">
       <span>{info.label}</span>
       <button
         className="font-semibold text-blue-300 hover:text-blue-200"
         onClick={() => { info.restore(); onDismiss(); }}
       >Undo</button>
-      <button className="text-gray-400 hover:text-white" onClick={onDismiss} aria-label="Dismiss">✕</button>
+      <button className="text-slate-400 hover:text-white" onClick={onDismiss} aria-label="Dismiss">✕</button>
     </div>
   );
 }
