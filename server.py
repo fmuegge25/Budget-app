@@ -95,10 +95,10 @@ def _require_access_key():
     provided = request.headers.get("X-Budget-Key") or request.args.get("key", "")
     if provided == ACCESS_KEY:
         return
-    return Response(
-        "Access key required", 401,
-        {"WWW-Authenticate": 'Basic realm="Simple Budget"'},
-    )
+    # No WWW-Authenticate header on purpose: it made browsers pop their own
+    # username/password dialog. The app's JS handles 401 itself (asks for the
+    # key once, then remembers it on that device).
+    return Response("Access key required", 401)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
