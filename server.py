@@ -24,7 +24,11 @@ app = Flask(__name__, static_folder=None)
 CORS(app)  # allow requests from other devices on the tailnet
 
 CONFIG_FILE = ROOT / "plaid_config.json"
-STATE_FILE = ROOT / "budget_data.json"
+# DATA_DIR lets a host keep the data on a persistent disk (Railway volume
+# mounted at /data) separate from the code. Defaults to next to this file.
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT)))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+STATE_FILE = DATA_DIR / "budget_data.json"
 
 # Guards every read-modify-write of STATE_FILE. Without this, a bank-import
 # request (which reads the file, spends time parsing/merging CSV rows, then
